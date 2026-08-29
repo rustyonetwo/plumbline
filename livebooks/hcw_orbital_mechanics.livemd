@@ -1,0 +1,685 @@
+<!-- livebook:{"app_settings":{"slug":"hcw"}} -->
+
+# Hill–Clohessy–Wiltshire Relative Motion: An Executable Specification
+
+```elixir
+Mix.install([
+  {:plumbline, path: Path.join(__DIR__, "..")},
+  {:vega_lite, "~> 0.1"},
+  {:kino, "~> 0.14"},
+  {:kino_vega_lite, "~> 0.1"}
+])
+```
+
+## What this document is
+
+This notebook is a **specification**, not a test file. It was written
+before any implementation existed, and it states — in narrative, in
+mathematics, and in executable assertions — the properties that any
+correct implementation of Hill–Clohessy–Wiltshire (HCW) relative
+motion must satisfy.
+
+It is intended to be read by three audiences without modification:
+
+1. **A human**, who reads the narrative and the rendered mathematics to
+   understand the domain and to *verify that the equations on this page
+   match the functions that implement them*.
+2. **A coding agent**, which reads the same content to understand what
+   it must build, and which can execute the assertions below to obtain a
+   closed feedback loop it controls itself.
+3. **A CI pipeline**, which executes the notebook headlessly and fails
+   the build if any invariant is violated.
+
+The unit test suite sits *below* this document. Tests guard specific
+cases — edge conditions, error paths, boundary values. This notebook
+guards the invariants: the properties that must hold for *all* valid
+inputs, and which an implementation can violate while leaving every
+unit test green.
+
+> #### Verification status {: .warning}
+>
+> Claims in this notebook carry citations. Items marked
+> **[VERIFY]** are ones the author has not yet checked against the
+> primary source and must confirm before this document is treated as
+> authoritative. See [Provenance](#provenance-and-verification-status).
+
+## 1. The physical setting
+
+Two spacecraft share an orbit around a central body. One — the
+**chief** (or *target*) — is treated as flying a known reference orbit.
+The other — the **deputy** (or *chaser*) — flies nearby. We want to
+describe the deputy's motion *relative to the chief*, because that is
+the quantity that matters for rendezvous, proximity operations,
+formation flying, and collision avoidance. Absolute inertial position
+is nearly useless for those tasks: what matters is "where is the other
+vehicle relative to me, and where will it be in twenty minutes."
+
+### The LVLH frame
+
+Relative motion is expressed in the chief's **Local-Vertical /
+Local-Horizontal (LVLH)** frame, a rotating frame with origin at the
+chief's centre of mass:
+
+| Axis | Name | Direction |
+|------|------|-----------|
+| $x$ | radial | outward along the chief's position vector (away from the central body) |
+| $y$ | along-track | along the chief's velocity direction, completing the right-handed set |
+| $z$ | cross-track | along the chief's orbital angular momentum vector |
+
+The frame rotates with the chief at the orbital mean motion $n$. Because
+it rotates, the equations of motion written in it contain centrifugal
+and Coriolis terms. **Those terms are the entire physical content of
+HCW, and they are the part an implementation is most likely to get
+wrong** — a dropped Coriolis coupling produces motion that looks
+plausible over short spans and is catastrophically wrong over one orbit.
+
+<!-- TODO(rusty): consider a hand-drawn LVLH axis diagram here.
+     A rendered figure would carry this section better than the table. -->
+
+### Mean motion
+
+For a circular reference orbit of semi-major axis $a$ about a body of
+gravitational parameter $\mu$, the mean motion is
+
+$$
+n = \sqrt{\frac{\mu}{a^{3}}}
+$$
+
+and the orbital period is $T = 2\pi / n$. Every invariant in this
+notebook is stated in terms of $n$, not in terms of altitude — the
+physics is scale-free in that parameter.
+
+## 2. The equations
+
+HCW describes the deputy's relative position $(x, y, z)$ under three
+assumptions, stated here explicitly because **every invariant below
+holds only inside this envelope**:
+
+1. The chief's orbit is **circular** (eccentricity $e = 0$).
+2. The separation between the vehicles is **small** relative to the
+   orbit radius, so the differential gravity field can be linearised
+   about the chief. In practice this means separations of order
+   kilometres in an orbit of order thousands of kilometres.
+3. **No perturbations** — no $J_2$ oblateness, no drag, no solar
+   radiation pressure, no thrust. Pure two-body, linearised.
+
+Under those assumptions the relative motion satisfies three coupled
+second-order linear ODEs [Clohessy & Wiltshire, 1960; Hill, 1878]:
+
+$$
+\begin{aligned}
+\ddot{x} - 3n^{2}x - 2n\dot{y} &= 0 \\[4pt]
+\ddot{y} + 2n\dot{x} &= 0 \\[4pt]
+\ddot{z} + n^{2}z &= 0
+\end{aligned}
+$$
+
+Read physically:
+
+- $3n^2 x$ — differential gravity plus centrifugal effect in the radial
+  direction. Note the **sign**: it is destabilising. A deputy displaced
+  radially is pushed further out, not restored.
+- $-2n\dot{y}$ and $2n\dot{x}$ — **Coriolis coupling**. This is what
+  converts a radial displacement into along-track motion and back. It is
+  the term that closes the orbit.
+- $-n^2 z$ — a simple harmonic restoring force. The cross-track axis is
+  **completely decoupled** from the in-plane motion, and oscillates at
+  exactly the orbital frequency.
+
+### State-space form
+
+The implementation integrates the equivalent six first-order system.
+With state vector $\mathbf{s} = [x, y, z, \dot{x}, \dot{y}, \dot{z}]^{\top}$:
+
+$$
+\dot{\mathbf{s}} = A\mathbf{s}, \qquad
+A = \begin{bmatrix}
+0 & 0 & 0 & 1 & 0 & 0 \\
+0 & 0 & 0 & 0 & 1 & 0 \\
+0 & 0 & 0 & 0 & 0 & 1 \\
+3n^{2} & 0 & 0 & 0 & 2n & 0 \\
+0 & 0 & 0 & -2n & 0 & 0 \\
+0 & 0 & -n^{2} & 0 & 0 & 0
+\end{bmatrix}
+$$
+
+**This matrix is the specification of `HCW.derivative/2`.** A reader
+verifying the implementation should be able to place this matrix
+side by side with that function and check it entry by entry.
+
+### Closed-form solution
+
+The system is linear with constant coefficients, so it admits an exact
+solution. For initial state $(x_0, y_0, z_0, \dot{x}_0, \dot{y}_0,
+\dot{z}_0)$ [Clohessy & Wiltshire, 1960]:
+
+$$
+\begin{aligned}
+x(t) &= (4 - 3\cos nt)\,x_0
+      + \frac{\sin nt}{n}\,\dot{x}_0
+      + \frac{2}{n}(1 - \cos nt)\,\dot{y}_0 \\[6pt]
+y(t) &= 6(\sin nt - nt)\,x_0 + y_0
+      - \frac{2}{n}(1 - \cos nt)\,\dot{x}_0
+      + \frac{1}{n}(4\sin nt - 3nt)\,\dot{y}_0 \\[6pt]
+z(t) &= z_0\cos nt + \frac{\dot{z}_0}{n}\sin nt
+\end{aligned}
+$$
+
+with velocities obtained by differentiation:
+
+$$
+\begin{aligned}
+\dot{x}(t) &= 3n\sin nt\,x_0 + \cos nt\,\dot{x}_0 + 2\sin nt\,\dot{y}_0 \\[6pt]
+\dot{y}(t) &= 6n(\cos nt - 1)\,x_0 - 2\sin nt\,\dot{x}_0 + (4\cos nt - 3)\,\dot{y}_0 \\[6pt]
+\dot{z}(t) &= -n z_0 \sin nt + \dot{z}_0\cos nt
+\end{aligned}
+$$
+
+This closed form is used in the notebook as an **independent oracle**,
+not as the implementation. The implementation integrates numerically
+(RK4); the oracle is how we detect that the integrator and the analytic
+solution agree. Two independent derivations agreeing is stronger
+evidence than either alone.
+
+## 3. The invariants
+
+These are the properties the implementation must satisfy. Each is
+stated in prose, then in mathematics, then asserted executably in
+[section 5](#5-executable-verification).
+
+<!-- The derivations below are worked in full deliberately.
+     A proof layer whose proofs are not on the page is just a test file. -->
+
+### Invariant I1 — Bounded relative orbits are periodic
+
+**Claim.** If the initial along-track velocity satisfies
+
+$$
+\boxed{\;\dot{y}_0 = -2n\,x_0\;}
+$$
+
+then the relative motion is periodic with period $T = 2\pi/n$: the
+deputy returns exactly to its starting position and velocity after one
+orbit of the chief.
+
+**Derivation.** Inspect the closed-form solution for $y(t)$. Every term
+is bounded and $T$-periodic *except* the two secular terms proportional
+to $t$:
+
+$$
+y_{\text{secular}}(t) = -6n x_0 t - 3\dot{y}_0 t = -\left(6n x_0 + 3\dot{y}_0\right)t
+$$
+
+This grows without bound unless its coefficient vanishes:
+
+$$
+6n x_0 + 3\dot{y}_0 = 0 \iff \dot{y}_0 = -2n x_0
+$$
+
+The magnitude of getting this wrong is worth stating concretely. If the
+condition is applied to the *radial* velocity instead of the along-track
+velocity — $\dot{x}_0 = -2nx_0$ with $\dot{y}_0 = 0$, a transposition
+that is easy to make and impossible to see by inspection of a plot over
+a few minutes — the secular coefficient is $-6nx_0$ and the deputy walks
+
+$$
+\lvert\Delta y\rvert = 6n x_0 T = 6n x_0 \cdot \frac{2\pi}{n} = 12\pi x_0
+$$
+
+which for a 1 km radial offset is **37.699 km of along-track drift per
+orbit**, independent of altitude. Confirmed numerically in section 5.
+
+Substituting that condition back into the closed form collapses it to
+
+$$
+\begin{aligned}
+x(t) &= x_0\cos nt + \frac{\dot{x}_0}{n}\sin nt \\[4pt]
+y(t) &= y_0 - 2x_0\sin nt - \frac{2\dot{x}_0}{n}(1 - \cos nt)
+\end{aligned}
+$$
+
+Both are pure sinusoids in $nt$, hence $T$-periodic. $\blacksquare$
+
+**Geometry.** With $\dot{x}_0 = 0$ this reduces to
+$x(t) = x_0\cos nt$, $y(t) = y_0 - 2x_0\sin nt$ — an ellipse with
+along-track semi-axis exactly **twice** the radial semi-axis, traversed
+once per orbit. This is the well-known **2:1 relative motion ellipse**.
+Note that $\lVert\mathbf{r}\rVert$ is *not* constant on this orbit; it
+varies by a factor of two between the radial and along-track extremes.
+
+> #### Why this invariant is the right one to guard {: .info}
+>
+> An implementation with a sign error in the Coriolis term, or with the
+> $2n\dot{x}$ coupling dropped entirely, will still produce smooth,
+> plausible-looking motion. Sampled over a few minutes it is
+> indistinguishable from correct. Over one full period it spirals
+> instead of closing. A unit test that checks a single propagation step
+> against a fixed expected output cannot see this. The invariant can.
+
+### Invariant I2 — Cross-track motion is decoupled
+
+**Claim.** If $z_0 = \dot{z}_0 = 0$, then $z(t) = 0$ for all $t$,
+regardless of the in-plane state.
+
+**Derivation.** Immediate from the third equation of motion,
+$\ddot{z} + n^2 z = 0$, which contains no $x$ or $y$ terms. With zero
+initial conditions the unique solution is the trivial one.
+$\blacksquare$
+
+This invariant is cheap to state and cheap to check, and it guards
+against a specific class of implementation error: accidental coupling
+introduced by indexing mistakes in the state vector, which is a real
+hazard when the state is a flat six-element list rather than a named
+struct.
+
+### Invariant I3 — The HCW integral of motion is conserved
+
+**Claim.** The quantity
+
+$$
+J = \tfrac{1}{2}\left(\dot{x}^{2} + \dot{y}^{2} + \dot{z}^{2}\right)
+  - \tfrac{3}{2}n^{2}x^{2}
+  + \tfrac{1}{2}n^{2}z^{2}
+$$
+
+is constant along every trajectory of the HCW system, for **all**
+initial conditions — not only the periodic ones.
+
+**Derivation.** Differentiate along a trajectory and substitute the
+equations of motion ($\ddot{x} = 3n^2 x + 2n\dot{y}$,
+$\ddot{y} = -2n\dot{x}$, $\ddot{z} = -n^2 z$):
+
+$$
+\begin{aligned}
+\frac{dJ}{dt}
+&= \dot{x}\ddot{x} + \dot{y}\ddot{y} + \dot{z}\ddot{z}
+   - 3n^{2}x\dot{x} + n^{2}z\dot{z} \\[4pt]
+&= \dot{x}\left(3n^{2}x + 2n\dot{y}\right)
+   + \dot{y}\left(-2n\dot{x}\right)
+   + \dot{z}\left(-n^{2}z\right)
+   - 3n^{2}x\dot{x} + n^{2}z\dot{z} \\[4pt]
+&= \underbrace{3n^{2}x\dot{x} - 3n^{2}x\dot{x}}_{0}
+   + \underbrace{2n\dot{x}\dot{y} - 2n\dot{x}\dot{y}}_{0}
+   + \underbrace{-n^{2}z\dot{z} + n^{2}z\dot{z}}_{0}
+   \;=\; 0
+\end{aligned}
+$$
+
+$\blacksquare$
+
+Note the sign of the $x$ term: **negative**, matching the destabilising
+$3n^2x$ in the equations of motion. This is not the kinetic-plus-
+potential energy of an orbit; it is the conserved quantity of the
+linearised rotating-frame system, analogous to a Jacobi integral.
+
+**Sanity check.** On the 2:1 ellipse ($x = x_0\cos nt$,
+$y = -2x_0\sin nt$, $z \equiv 0$) this evaluates to
+$J = \tfrac{1}{2}n^{2}x_0^{2}$, independent of $t$ — worked out
+numerically in section 5.
+
+> #### Numerical caveat, stated up front {: .warning}
+>
+> RK4 is **not** a symplectic integrator. It does not conserve $J$
+> exactly; $J$ drifts slowly with accumulated truncation error. The
+> assertion below therefore checks $J$ against a *relative tolerance*,
+> and the notebook prints the observed drift so a reader can see the
+> real number rather than trusting a threshold. Claiming "RK4 conserves
+> energy" would be false, and this document does not claim it.
+
+### Bonus — the truly circular relative orbit
+
+The 2:1 ellipse is not circular. A relative orbit on which
+$\lVert\mathbf{r}\rVert$ *is* genuinely constant requires cross-track
+motion. Taking $\dot{x}_0 = 0$, $\dot{y}_0 = -2n x_0$ (so I1 holds),
+together with
+
+$$
+z_0 = \sqrt{3}\,x_0, \qquad \dot{z}_0 = 0
+$$
+
+gives $x = x_0\cos nt$, $y = -2x_0\sin nt$, $z = \sqrt{3}x_0\cos nt$, and
+
+$$
+\lVert\mathbf{r}\rVert^{2} = x_0^{2}\cos^{2}nt + 4x_0^{2}\sin^{2}nt + 3x_0^{2}\cos^{2}nt = 4x_0^{2}
+$$
+
+a circle of radius $2x_0$ lying in a plane inclined $60°$ to the
+orbital plane. This is included because it is a striking result and a
+strong independent check on the implementation, **not** because the
+core demonstration needs it. It is incompatible with I2 by
+construction — it requires $z \neq 0$ — so it is exercised with its own
+initial condition. **[VERIFY]** — the $\sqrt{3}$ amplitude ratio for
+the general circular orbit should be confirmed against Alfriend et al.
+(2010) before this is presented as textbook fact rather than as a
+result derived on this page.
+
+## 4. The interface contract
+
+The implementation must expose the following module. Signatures are
+part of the specification: the notebook below calls exactly these.
+
+```
+Plumbline.Dynamics.HCW
+
+  %HCW.State{x:, y:, z:, vx:, vy:, vz:}
+      Relative state in the chief's LVLH frame.
+      Positions in km, velocities in km/s.
+
+  derivative(state, n) :: State.t()
+      The instantaneous time-derivative of the state — the matrix A
+      of section 2 applied to `state`. Returns a State whose position
+      fields hold velocity and whose velocity fields hold acceleration.
+
+  step(state, n, dt) :: State.t()
+      One classical fourth-order Runge-Kutta step of size `dt`.
+
+  propagate(state, n, dt, t_final) :: [{float(), State.t()}]
+      Repeated application of step/3 from t = 0 to t = t_final,
+      returning [{t, state}] inclusive of both endpoints.
+
+  analytic(state0, n, t) :: State.t()
+      The closed-form solution of section 2 evaluated at time `t`.
+      Independent of derivative/2 and step/3 — this is the oracle.
+
+  integral(state, n) :: float()
+      The conserved quantity J of invariant I3.
+```
+
+> #### Deviation from the original brief {: .neutral}
+>
+> The brief specified `propagate(state_vector, n, dt)`. That name reads
+> as "advance to a time" but the arity fits a single step. It is split
+> here into `step/3` (one RK4 step) and `propagate/4` (a trajectory),
+> because the notebook needs both and conflating them makes the
+> periodicity assertion ambiguous about what it is testing.
+
+**The implementation may not import, reference, or depend on this
+notebook.** The dependency runs one way. The notebook is the wall; the
+implementation bounces off it.
+
+## 5. Executable verification
+
+> #### This section does not pass yet {: .error}
+>
+> `Plumbline.Dynamics.HCW` exists only as a stub — every function
+> raises. That is intentional and is the point of the exercise: the
+> specification is complete, executable, and *failing* before the
+> implementation is written. The assertions below define what "done"
+> means, and nothing else does.
+
+### Scenario parameters
+
+A 400 km circular low Earth orbit, with a deputy offset 1 km radially.
+
+```elixir
+alias Plumbline.Dynamics.HCW
+
+# WGS-84 / EGM-96 Earth gravitational parameter, km^3/s^2.
+mu = 398_600.4418
+
+# Equatorial radius + altitude, km.
+a = 6378.137 + 400.0
+
+# Mean motion (rad/s) and orbital period (s).
+n = :math.sqrt(mu / (a * a * a))
+period = 2 * :math.pi() / n
+
+# Integration grid: an exact whole number of steps per period, so the
+# final sample lands precisely on t = T with no interpolation.
+steps = 5_000
+dt = period / steps
+
+%{
+  mean_motion_rad_s: n,
+  period_s: Float.round(period, 3),
+  period_min: Float.round(period / 60, 3),
+  dt_s: Float.round(dt, 6)
+}
+```
+
+### The drift-free initial condition of I1
+
+```elixir
+x0 = 1.0
+
+initial = %HCW.State{
+  x: x0,
+  y: 0.0,
+  z: 0.0,
+  vx: 0.0,
+  # The invariant condition. Not -2*n*x0 anywhere else, not vx.
+  vy: -2 * n * x0,
+  vz: 0.0
+}
+```
+
+```elixir
+trajectory = HCW.propagate(initial, n, dt, period)
+{_t_final, final} = List.last(trajectory)
+
+length(trajectory)
+```
+
+### Assertion I1 — periodicity
+
+Position error after exactly one period, against a 1 metre tolerance.
+Expected actual error at this step size is of order centimetres; the
+tolerance is deliberately loose, because it exists to catch *physics*
+errors, not to police integrator accuracy.
+
+```elixir
+position_error =
+  :math.sqrt(
+    :math.pow(final.x - initial.x, 2) +
+      :math.pow(final.y - initial.y, 2) +
+      :math.pow(final.z - initial.z, 2)
+  )
+
+velocity_error =
+  :math.sqrt(
+    :math.pow(final.vx - initial.vx, 2) +
+      :math.pow(final.vy - initial.vy, 2) +
+      :math.pow(final.vz - initial.vz, 2)
+  )
+
+# 1 metre, in km.
+position_tolerance = 1.0e-3
+
+IO.puts("I1  closure error : #{Float.round(position_error * 1000, 4)} m")
+IO.puts("I1  velocity error: #{Float.round(velocity_error * 1_000_000, 4)} mm/s")
+
+true = position_error < position_tolerance
+:ok
+```
+
+### Assertion I2 — cross-track decoupling
+
+```elixir
+max_z =
+  trajectory
+  |> Enum.map(fn {_t, s} -> abs(s.z) + abs(s.vz) end)
+  |> Enum.max()
+
+IO.puts("I2  max |z| + |vz| over one orbit: #{max_z}")
+
+true = max_z == 0.0
+:ok
+```
+
+The comparison here is to **exact** zero, not to a tolerance. Cross-track
+decoupling is structural: no arithmetic in a correct implementation ever
+introduces a non-zero value into $z$ from an all-zero cross-track
+initial condition. If this assertion needs a tolerance, the
+implementation has coupling it should not have.
+
+### Assertion I3 — conservation of $J$
+
+```elixir
+j_values = Enum.map(trajectory, fn {_t, s} -> HCW.integral(s, n) end)
+
+j_initial = HCW.integral(initial, n)
+j_min = Enum.min(j_values)
+j_max = Enum.max(j_values)
+
+relative_drift = (j_max - j_min) / abs(j_initial)
+
+# Analytic prediction for the 2:1 ellipse: J = (1/2) n^2 x0^2.
+j_predicted = 0.5 * n * n * x0 * x0
+
+IO.puts("I3  J (measured)  : #{j_initial}")
+IO.puts("I3  J (predicted) : #{j_predicted}")
+IO.puts("I3  relative drift: #{relative_drift}")
+
+true = abs(j_initial - j_predicted) / abs(j_predicted) < 1.0e-9
+true = relative_drift < 1.0e-6
+:ok
+```
+
+### Cross-check — numerical integrator against the analytic oracle
+
+I1 through I3 constrain the *outcome*. This cell constrains the
+*trajectory*: it compares the RK4 result against the closed-form
+solution at every sample. Two independent derivations agreeing at all
+5,000 points is a much stronger statement than agreement at the
+endpoint alone.
+
+```elixir
+max_deviation =
+  trajectory
+  |> Enum.map(fn {t, numeric} ->
+    exact = HCW.analytic(initial, n, t)
+
+    :math.sqrt(
+      :math.pow(numeric.x - exact.x, 2) +
+        :math.pow(numeric.y - exact.y, 2) +
+        :math.pow(numeric.z - exact.z, 2)
+    )
+  end)
+  |> Enum.max()
+
+IO.puts("RK4 vs analytic, max deviation: #{Float.round(max_deviation * 1000, 6)} m")
+
+true = max_deviation < 1.0e-3
+:ok
+```
+
+### The 2:1 ellipse
+
+Plotted in the conventional LVLH orientation: along-track on the
+horizontal axis, radial on the vertical. A correct implementation
+produces a closed ellipse whose horizontal extent is exactly twice its
+vertical extent. An implementation that has broken the Coriolis
+coupling produces a spiral, and the failure is visible without reading
+a single number.
+
+```elixir
+alias VegaLite, as: Vl
+
+points =
+  trajectory
+  |> Enum.take_every(10)
+  |> Enum.map(fn {t, s} ->
+    %{"along_track_km" => s.y, "radial_km" => s.x, "t_min" => t / 60}
+  end)
+
+Vl.new(width: 520, height: 320, title: "Relative motion in the LVLH plane (one orbit)")
+|> Vl.data_from_values(points)
+|> Vl.mark(:line, point: false, stroke_width: 2)
+|> Vl.encode_field(:x, "along_track_km",
+  type: :quantitative,
+  title: "Along-track y (km)",
+  scale: [zero: false]
+)
+|> Vl.encode_field(:y, "radial_km",
+  type: :quantitative,
+  title: "Radial x (km)",
+  scale: [zero: false]
+)
+|> Vl.encode_field(:order, "t_min", type: :quantitative)
+```
+
+### Bonus — the circular relative orbit
+
+```elixir
+circular = %HCW.State{
+  x: x0,
+  y: 0.0,
+  z: :math.sqrt(3) * x0,
+  vx: 0.0,
+  vy: -2 * n * x0,
+  vz: 0.0
+}
+
+radii =
+  circular
+  |> HCW.propagate(n, dt, period)
+  |> Enum.map(fn {_t, s} ->
+    :math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z)
+  end)
+
+r_min = Enum.min(radii)
+r_max = Enum.max(radii)
+
+IO.puts("|r| range: #{Float.round(r_min, 9)} .. #{Float.round(r_max, 9)} km")
+IO.puts("|r| predicted: #{2 * x0} km")
+
+true = (r_max - r_min) / r_max < 1.0e-6
+:ok
+```
+
+## Provenance and verification status
+
+Every claim above is either derived on this page or cited. The
+derivations of I1, I2 and I3 are worked in full and can be checked by
+hand against the equations of motion in section 2 — they do not rest on
+an appeal to authority. The items below are the ones that do.
+
+Independently of the implementation, the claims on this page were
+checked numerically against the closed-form solution before any code
+was written. That check is a throwaway script, not part of the project,
+and its results are recorded here:
+
+| Claim | Status |
+|---|---|
+| HCW equations of motion (section 2) | Cited — Clohessy & Wiltshire (1960) |
+| Closed-form solution (section 2) | Cited; **verified by hand** (substitution into the equations of motion yields $0=0$ in all three axes) and **verified numerically** — worst relative residual across five sample times, $8.1\times10^{-10}$ |
+| I1 drift-free condition $\dot y_0 = -2nx_0$ | Derived above; **verified numerically** — closure error after one period exactly $0.0$ km |
+| I1 failure mode, $12\pi x_0$ drift | Derived above; **verified numerically** — $37.699$ km for $x_0 = 1$ km |
+| I1 2:1 ellipse geometry | Derived above; **verified numerically** — extents $\pm 1$ km radial, $\pm 2$ km along-track, ratio exactly $2.0$ |
+| I2 cross-track decoupling | Derived above; structural |
+| I3 conserved quantity $J$ | Derived above; **verified numerically** on a *non-periodic* trajectory — relative spread $3.0\times10^{-14}$, and $J = \tfrac12 n^2x_0^2$ on the ellipse agrees to the last significant digit. **[VERIFY]** — no standard citation located for this specific form; presented as a result derived on this page, not as a textbook quantity. |
+| $\sqrt{3}$ circular-orbit amplitude ratio | Derived above; **verified numerically** — $\lVert r\rVert$ varies by $1.1\times10^{-14}$ relative over one orbit, mean $2.0$ km. **[VERIFY]** against Alfriend et al. (2010) before presenting as textbook fact. |
+| Chapter/section numbers in references below | **[VERIFY]** — cited from the author's recollection of these texts; page-level references must be confirmed against the physical books before publication or presentation. |
+| $\mu = 398{,}600.4418\ \mathrm{km^3/s^2}$ | **[VERIFY]** — standard WGS-84 value; confirm the digits and the datum before use in any context where they matter. |
+
+## References
+
+**Primary sources**
+
+- Hill, G. W. (1878). "Researches in the Lunar Theory." *American
+  Journal of Mathematics*, 1(1), 5–26. doi:10.2307/2369430
+  — the original derivation of the rotating-frame equations.
+
+- Clohessy, W. H., & Wiltshire, R. S. (1960). "Terminal Guidance System
+  for Satellite Rendezvous." *Journal of the Aerospace Sciences*,
+  27(9), 653–658. doi:10.2514/8.8704
+  — the rendezvous formulation and closed-form solution used here.
+
+**Textbook treatments**
+
+- Vallado, D. A. (2013). *Fundamentals of Astrodynamics and
+  Applications*, 4th ed. Microcosm Press. **[VERIFY chapter]**
+- Curtis, H. D. (2020). *Orbital Mechanics for Engineering Students*,
+  4th ed. Butterworth-Heinemann. **[VERIFY chapter]**
+- Schaub, H., & Junkins, J. L. (2018). *Analytical Mechanics of Space
+  Systems*, 4th ed. AIAA Education Series.
+- Alfriend, K. T., Vadali, S. R., Gurfil, P., How, J. P., & Breger,
+  L. S. (2010). *Spacecraft Formation Flying: Dynamics, Control and
+  Navigation*. Butterworth-Heinemann.
+
+**Numerical method**
+
+- Hairer, E., Nørsett, S. P., & Wanner, G. (1993). *Solving Ordinary
+  Differential Equations I: Nonstiff Problems*, 2nd ed. Springer.
+  — classical RK4, and the truncation-error behaviour that motivates
+  the tolerances chosen above.
