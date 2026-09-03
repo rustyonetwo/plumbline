@@ -21,6 +21,24 @@ executably.
 Read it before you write a line of Elixir. It will teach you the domain
 if you don't know it.
 
+Proof-driven development is the rigorous end of a broader practice —
+invariant-driven development — where an executable notebook checks a
+property that holds generally (true for every valid input, not a fixed
+case) and can be derived or independently measured without sharing code
+with the implementation. Not every domain has a closed-form oracle the
+way orbital mechanics does.
+
+`hcw_orbital_mechanics.livemd` is the proof-tier notebook and the
+repository's primary artifact — it is what makes the "proof" in
+proof-driven development an honest word. A second, lower-priority
+notebook may exist alongside it to demonstrate the broader
+invariant-driven tier (see "What this repository is not" for the
+boundary on that). Where the two differ, keep them separate rather
+than merging concerns into one notebook: proving the physics is
+correct and characterising `propagate/4`'s computational behaviour are
+different claims, checked differently, and a reader — or a CI job —
+should be able to run one without the other.
+
 ## The cardinal rule
 
 **Never edit the notebook to make an assertion pass.**
@@ -117,7 +135,8 @@ notebook derives all of them; this is the short version.
   `@dialyzer {:nowarn_function, ...}` or credo `# credo:disable-for-*`
   comments to hide a real finding. Fix the finding or explain why it
   should stand.
-- Keep it small. One struct, one propagator, one notebook. This is a
+- Keep it small. One struct, one propagator, as few notebooks as the
+  distinct concepts being demonstrated actually require. This is a
   demonstration, not a simulator — do not grow it into one.
 
 ## Verifying your work
@@ -152,3 +171,14 @@ functions are stubs that raise. That is correct, not a bug to suppress
 - Not a place for speculative abstraction. There is one implementation
   of one model; it does not need a behaviour, a protocol, or a plugin
   system.
+- Not a place for absolute SLA thresholds — a fixed latency or memory
+  number tied to one machine's hardware and load has no oracle to check
+  it against, closed-form or otherwise, and is not an invariant. That
+  material belongs in the talk, not an executable notebook here.
+- A notebook demonstrating the *complexity* tier — e.g. confirming
+  `propagate/4`'s growth is linear in step count by fitting a curve
+  across increasing `N` — is in scope as a nice-to-have, separate from
+  `hcw_orbital_mechanics.livemd`, and lower priority than it. It is a
+  weaker, still-general claim (a growth shape true on any machine, not
+  a proof), and belongs in its own notebook rather than folded into the
+  physics one.
