@@ -1,10 +1,19 @@
-<!-- livebook:{"app_settings":{"slug":"hcw"}} -->
+<!-- livebook:{"app_settings":{"slug":"hcw","access_type":"public"}} -->
 
 # Hill–Clohessy–Wiltshire Relative Motion: An Executable Specification
 
 ```elixir
+# Where the plumbline project lives, as a path dependency.
+#
+# `__DIR__` is correct when this notebook is opened from disk in the
+# Livebook UI, but NOT when it is deployed headlessly via
+# LIVEBOOK_APPS_PATH: in app mode Livebook evaluates an autosaved copy,
+# so `__DIR__` points at its autosave directory, which has no mix.exs.
+# bin/run_checkpoint sets PLUMBLINE_PROJECT_PATH to close that gap.
+project_path = System.get_env("PLUMBLINE_PROJECT_PATH") || Path.join(__DIR__, "..")
+
 Mix.install([
-  {:plumbline, path: Path.join(__DIR__, "..")},
+  {:plumbline, path: project_path},
   {:vega_lite, "~> 0.1"},
   {:kino, "~> 0.14"},
   {:kino_vega_lite, "~> 0.1"}
@@ -407,6 +416,55 @@ implementation bounces off it.
 > implementation is written. The assertions below define what "done"
 > means, and nothing else does.
 
+### Checkpoint reporting
+
+Each assertion below reports its result through a small helper,
+`Checkpoint`, instead of a raw `true = ...` pattern match. This changes
+*how* results are reported, never *what* is checked — every tolerance
+and every comparison below is identical to what a plain assertion would
+check. The helper itself lives in `livebooks/checkpoint.exs`, kept out
+of this document so the physics stays readable, and out of `lib/`
+because it is notebook infrastructure rather than part of the library.
+
+What it buys:
+
+1. **One pass reports every invariant.** `check/3` does not raise, so a
+   failed invariant doesn't hide the ones after it — useful while an
+   implementation satisfies some and not others.
+2. **A failure is still impossible to miss.** The final cell,
+   `Checkpoint.complete/0`, raises if anything failed. Interactively
+   that is a red cell naming the failed checks; the run does not end
+   quietly green.
+3. **When `PLUMBLINE_REPORT_PATH` is set**, each result is also
+   appended as one JSON line to that path, with its expected, actual and
+   tolerance values, and `complete/0` writes a completion sentinel
+   before raising. `bin/run_checkpoint` uses this to run the notebook
+   headlessly through Livebook's own execution path and turn the report
+   into a CI exit code — which is what makes "CI runs the actual
+   notebook" true rather than aspirational.
+
+Three outcomes are deliberately distinguishable. Every check present and
+true is a pass. A recorded `"ok": false` means the code ran but the
+physics is wrong, and names which invariant. A *missing* sentinel means
+evaluation aborted on an uncaught exception — which is what you get
+while the functions are still stubs that raise — and is a different
+failure from an assertion that didn't hold.
+
+```elixir
+Code.require_file(Path.join(project_path, "livebooks/checkpoint.exs"))
+
+# The manifest lives here, not in the helper: it is what catches an
+# assertion cell being deleted without anyone noticing.
+Checkpoint.init([
+  "I1_periodicity",
+  "I2_cross_track_decoupling",
+  "I3_predicted_value",
+  "I3_conservation_drift",
+  "rk4_vs_analytic",
+  "circular_orbit_constant_radius"
+])
+```
+
 ### Scenario parameters
 
 A 400 km circular low Earth orbit, with a deputy offset 1 km radially.
@@ -488,8 +546,13 @@ position_tolerance = 1.0e-3
 IO.puts("I1  closure error : #{Float.round(position_error * 1000, 4)} m")
 IO.puts("I1  velocity error: #{Float.round(velocity_error * 1_000_000, 4)} mm/s")
 
-true = position_error < position_tolerance
-:ok
+Checkpoint.check("I1_periodicity", position_error < position_tolerance,
+  expected: 0.0,
+  actual: Float.round(position_error, 9),
+  tolerance: position_tolerance,
+  unit: "km",
+  message: "position closure error after one period"
+)
 ```
 
 ### Assertion I2 — cross-track decoupling
@@ -502,8 +565,13 @@ max_z =
 
 IO.puts("I2  max |z| + |vz| over one orbit: #{max_z}")
 
-true = max_z == 0.0
-:ok
+Checkpoint.check("I2_cross_track_decoupling", max_z == 0.0,
+  expected: 0.0,
+  actual: max_z,
+  tolerance: 0.0,
+  unit: "km (+ km/s)",
+  message: "exact zero required, not a tolerance — see prose above this section"
+)
 ```
 
 The comparison here is to **exact** zero, not to a tolerance. Cross-track
@@ -530,9 +598,25 @@ IO.puts("I3  J (measured)  : #{j_initial}")
 IO.puts("I3  J (predicted) : #{j_predicted}")
 IO.puts("I3  relative drift: #{relative_drift}")
 
-true = abs(j_initial - j_predicted) / abs(j_predicted) < 1.0e-9
-true = relative_drift < 1.0e-6
-:ok
+predicted_error = abs(j_initial - j_predicted) / abs(j_predicted)
+
+Checkpoint.check("I3_predicted_value", predicted_error < 1.0e-9,
+  expected: j_predicted,
+  actual: j_initial,
+  tolerance: 1.0e-9,
+  unit: "relative error",
+  message: "J at t=0 vs the analytic prediction 0.5*n^2*x0^2 on the 2:1 ellipse"
+)
+
+Checkpoint.check("I3_conservation_drift", relative_drift < 1.0e-6,
+  expected: 0.0,
+  actual: relative_drift,
+  tolerance: 1.0e-6,
+  unit: "relative",
+  message:
+    "max-min spread of J over one orbit, relative to |J| — a tolerance, " <>
+      "not exact zero, because RK4 is not symplectic"
+)
 ```
 
 ### Cross-check — numerical integrator against the analytic oracle
@@ -559,8 +643,13 @@ max_deviation =
 
 IO.puts("RK4 vs analytic, max deviation: #{Float.round(max_deviation * 1000, 6)} m")
 
-true = max_deviation < 1.0e-3
-:ok
+Checkpoint.check("rk4_vs_analytic", max_deviation < 1.0e-3,
+  expected: 0.0,
+  actual: Float.round(max_deviation, 9),
+  tolerance: 1.0e-3,
+  unit: "km",
+  message: "max position deviation between the RK4 trajectory and the closed-form oracle, sampled at every point"
+)
 ```
 
 ### The 2:1 ellipse
@@ -610,10 +699,10 @@ circular = %HCW.State{
   vz: 0.0
 }
 
+circular_trajectory = HCW.propagate(circular, n, dt, period)
+
 radii =
-  circular
-  |> HCW.propagate(n, dt, period)
-  |> Enum.map(fn {_t, s} ->
+  Enum.map(circular_trajectory, fn {_t, s} ->
     :math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z)
   end)
 
@@ -623,8 +712,67 @@ r_max = Enum.max(radii)
 IO.puts("|r| range: #{Float.round(r_min, 9)} .. #{Float.round(r_max, 9)} km")
 IO.puts("|r| predicted: #{2 * x0} km")
 
-true = (r_max - r_min) / r_max < 1.0e-6
-:ok
+relative_variation = (r_max - r_min) / r_max
+
+Checkpoint.check("circular_orbit_constant_radius", relative_variation < 1.0e-6,
+  expected: 0.0,
+  actual: relative_variation,
+  tolerance: 1.0e-6,
+  unit: "relative",
+  message: "|r| max-min spread over one orbit on the sqrt(3) circular relative orbit"
+)
+```
+
+### Visualizing the circular relative orbit
+
+The plot above (2:1 ellipse) can't show this orbit honestly in the
+same two axes — projected onto plain `(x, y)` it's the *same* 2:1
+ellipse as the drift-free case, because `z` doesn't appear there at
+all. The plot below uses a different, exact combination instead:
+`0.5·x + (√3/2)·z`. Substituting the closed-form trajectory
+(`x = x₀cos nt`, `z = √3x₀cos nt`) shows this equals `2x₀cos nt` —
+exactly the same sinusoid that already appears as the along-track
+envelope. Paired with `y(t) = -2x₀sin nt`, this traces the orbit as it
+actually looks *within the tilted plane it lies in* (inclined 60° to
+the orbital plane, per the derivation above) — not an illustrative
+approximation, but an exact, distortion-free view. If the
+implementation is correct, this closes into a perfect circle of
+radius `2x₀`.
+
+```elixir
+circular_points =
+  circular_trajectory
+  |> Enum.take_every(10)
+  |> Enum.map(fn {t, s} ->
+    %{
+      "tilted_radial_km" => 0.5 * s.x + :math.sqrt(3) / 2 * s.z,
+      "along_track_km" => s.y,
+      "t_min" => t / 60
+    }
+  end)
+
+Vl.new(
+  width: 340,
+  height: 340,
+  title: "Circular relative orbit, viewed in its own tilted plane"
+)
+|> Vl.data_from_values(circular_points)
+|> Vl.mark(:line, point: false, stroke_width: 2)
+|> Vl.encode_field(:x, "tilted_radial_km",
+  type: :quantitative,
+  title: "In-plane radial (tilted 60° from orbital plane, km)",
+  scale: [zero: false]
+)
+|> Vl.encode_field(:y, "along_track_km",
+  type: :quantitative,
+  title: "Along-track y (km)",
+  scale: [zero: false]
+)
+|> Vl.encode_field(:order, "t_min", type: :quantitative)
+```
+
+```elixir
+Checkpoint.complete()
 ```
 
 ## Provenance and verification status

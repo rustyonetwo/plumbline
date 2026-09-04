@@ -148,15 +148,35 @@ mix credo --strict    # must be clean
 mix dialyzer          # must be clean
 mix test
 elixir verify_spec.exs  # independent check of the notebook's own claims
+bin/run_checkpoint      # runs the notebook headlessly; exits 0 only if every invariant holds
+elixir bin/checkpoint_history.exs   # every checkpoint run so far, as a trend
 ```
 
 `verify_spec.exs` is standalone — it needs no project and no
 dependencies, and it validates the notebook's mathematical claims
 against the closed-form solution. It does not test `lib/`.
 
-**The notebook's assertions are the actual definition of done.** Until
-the headless harness lands, run them by opening the notebook in
-Livebook and evaluating it.
+**The notebook's assertions are the actual definition of done.**
+`bin/run_checkpoint` deploys the notebook through Livebook's own
+execution path and converts its checkpoint report into an exit code, so
+this can be run unattended; opening the notebook in Livebook and
+evaluating it by hand does the same thing with the plots rendered.
+Requires Livebook on `PATH` (`mix escript.install hex livebook`).
+
+The report distinguishes three outcomes: every check present and true
+(exit 0); a check recorded `ok: false`, meaning the code ran but the
+physics is wrong; and a missing completion sentinel, meaning evaluation
+aborted on an uncaught exception rather than failing an assertion. A
+failing check does not abort the run, so one pass reports on every
+invariant rather than stopping at the first — and the final cell then
+raises, so a failure is not something a reader can scroll past.
+
+Runs accumulate in `reports/` (gitignored) rather than overwriting, and
+`bin/checkpoint_history.exs` reads them as a trend. Consult it after
+refactoring, not only after adding something: an invariant that was
+passing and now fails is the exact regression this repository is built
+to make visible, and it is far easier to see in a series than in a
+single run.
 
 Note that dialyzer will legitimately report `no_return` errors while
 functions are stubs that raise. That is correct, not a bug to suppress

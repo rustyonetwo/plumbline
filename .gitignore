@@ -27,8 +27,11 @@ plumbline-*.tar
 /.lexical/
 /.expert/
 
-# Notebook assertion reports written by the CI harness.
-/spec_report.jsonl
+# Checkpoint reports written by bin/run_checkpoint — one per run, kept so
+# convergence (or regression) across runs can be read with
+# bin/checkpoint_history.exs. Local history, not repository content;
+# commit one deliberately if it is worth keeping as an artifact.
+/reports/
 
 # Dialyzer PLTs (large binaries, rebuilt per toolchain).
 /priv/plts/

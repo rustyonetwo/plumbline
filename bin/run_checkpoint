@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Runs the HCW notebook headlessly and converts its checkpoint report
+# into a CI-style exit code.
+#
+# This is what makes "CI runs the actual notebook" literally true: it
+# starts a real Livebook server, deploys the notebook as an app via
+# LIVEBOOK_APPS_PATH (Livebook's own execution path, not an extraction
+# of the notebook's code), lets it run under a timeout, then hands the
+# resulting checkpoint report to bin/check_report.exs.
+#
+# Usage: bin/run_checkpoint [timeout_seconds]
+#
+# Exits 0 only if the notebook completed (wrote its sentinel) AND every
+# check declared in its manifest is present AND every one is ok:true.
+# Any other outcome — a timeout, an uncaught exception aborting
+# evaluation partway through, a missing check, or a recorded failure —
+# exits 1. See the notebook's "Checkpoint reporting" section (in
+# section 5) for what writes the report, and the companion pdd repo's
+# notes/DECISIONS_PENDING.md (D1) for the design this implements.
+
+set -euo pipefail
+
+TIMEOUT="${1:-120}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SERVER_LOG="$(mktemp -t plumbline_checkpoint_server.XXXXXX.log)"
+DATA_PATH="$(mktemp -d -t plumbline_livebook_data.XXXXXX)"
+PORT="${PLUMBLINE_CHECKPOINT_PORT:-8055}"
+
+# Every run is kept, under reports/, named by UTC start time. The point
+# is the series, not the latest one: reading several in order shows an
+# implementation converging on the invariants, or regressing away from
+# them. bin/checkpoint_history.exs renders that. reports/ is gitignored
+# — local history, not repository content.
+#
+# PLUMBLINE_REPORT_PATH overrides the location for a one-off run.
+REPORTS_DIR="$ROOT_DIR/reports"
+mkdir -p "$REPORTS_DIR"
+REPORT_PATH="${PLUMBLINE_REPORT_PATH:-$REPORTS_DIR/$(date -u +%Y%m%dT%H%M%SZ).jsonl}"
+
+cleanup() {
+  rm -rf "$SERVER_LOG" "$DATA_PATH"
+}
+trap cleanup EXIT
+
+echo "Running HCW notebook headlessly (timeout ${TIMEOUT}s)..."
+
+# PLUMBLINE_PROJECT_PATH: in app mode Livebook evaluates an autosaved
+# copy of the notebook, so the notebook's own `__DIR__` points at the
+# autosave directory rather than the repository. The setup cell prefers
+# this variable when it is set.
+#
+# LIVEBOOK_DATA_PATH: an isolated, ephemeral data directory, so a run
+# never inherits state from a previous one or from a developer's own
+# Livebook installation.
+PLUMBLINE_REPORT_PATH="$REPORT_PATH" \
+PLUMBLINE_PROJECT_PATH="$ROOT_DIR" \
+LIVEBOOK_APPS_PATH="$ROOT_DIR/livebooks" \
+LIVEBOOK_DATA_PATH="$DATA_PATH" \
+  timeout "${TIMEOUT}s" livebook server --port "$PORT" >"$SERVER_LOG" 2>&1 || true
+
+echo "--- notebook server log (tail) ---"
+tail -n 40 "$SERVER_LOG" || true
+echo "-----------------------------------"
+echo "report: $REPORT_PATH"
+
+# check_report.exs halts non-zero on failure, and `set -e` ends the
+# script there, so the report path is printed above this line rather
+# than below it.
+elixir "$ROOT_DIR/bin/check_report.exs" "$REPORT_PATH"
