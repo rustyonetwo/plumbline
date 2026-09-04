@@ -12,12 +12,11 @@
 # bin/run_checkpoint sets PLUMBLINE_PROJECT_PATH to close that gap.
 project_path = System.get_env("PLUMBLINE_PROJECT_PATH") || Path.join(__DIR__, "..")
 
-Mix.install([
-  {:plumbline, path: project_path},
-  {:vega_lite, "~> 0.1"},
-  {:kino, "~> 0.14"},
-  {:kino_vega_lite, "~> 0.1"}
-])
+# No visualisation dependencies here on purpose: this notebook states
+# and checks the physics, and nothing else. Plots live in
+# hcw_visualisation.livemd. Keeping this dependency list to one path
+# entry keeps the headless CI path fast and gives it less to break on.
+Mix.install([{:plumbline, path: project_path}])
 ```
 
 ## What this document is
@@ -82,7 +81,7 @@ HCW, and they are the part an implementation is most likely to get
 wrong** — a dropped Coriolis coupling produces motion that looks
 plausible over short spans and is catastrophically wrong over one orbit.
 
-<!-- TODO(rusty): consider a hand-drawn LVLH axis diagram here.
+<!-- TODO: consider a hand-drawn LVLH axis diagram here.
      A rendered figure would carry this section better than the table. -->
 
 ### Mean motion
@@ -652,41 +651,6 @@ Checkpoint.check("rk4_vs_analytic", max_deviation < 1.0e-3,
 )
 ```
 
-### The 2:1 ellipse
-
-Plotted in the conventional LVLH orientation: along-track on the
-horizontal axis, radial on the vertical. A correct implementation
-produces a closed ellipse whose horizontal extent is exactly twice its
-vertical extent. An implementation that has broken the Coriolis
-coupling produces a spiral, and the failure is visible without reading
-a single number.
-
-```elixir
-alias VegaLite, as: Vl
-
-points =
-  trajectory
-  |> Enum.take_every(10)
-  |> Enum.map(fn {t, s} ->
-    %{"along_track_km" => s.y, "radial_km" => s.x, "t_min" => t / 60}
-  end)
-
-Vl.new(width: 520, height: 320, title: "Relative motion in the LVLH plane (one orbit)")
-|> Vl.data_from_values(points)
-|> Vl.mark(:line, point: false, stroke_width: 2)
-|> Vl.encode_field(:x, "along_track_km",
-  type: :quantitative,
-  title: "Along-track y (km)",
-  scale: [zero: false]
-)
-|> Vl.encode_field(:y, "radial_km",
-  type: :quantitative,
-  title: "Radial x (km)",
-  scale: [zero: false]
-)
-|> Vl.encode_field(:order, "t_min", type: :quantitative)
-```
-
 ### Bonus — the circular relative orbit
 
 ```elixir
@@ -721,54 +685,6 @@ Checkpoint.check("circular_orbit_constant_radius", relative_variation < 1.0e-6,
   unit: "relative",
   message: "|r| max-min spread over one orbit on the sqrt(3) circular relative orbit"
 )
-```
-
-### Visualizing the circular relative orbit
-
-The plot above (2:1 ellipse) can't show this orbit honestly in the
-same two axes — projected onto plain `(x, y)` it's the *same* 2:1
-ellipse as the drift-free case, because `z` doesn't appear there at
-all. The plot below uses a different, exact combination instead:
-`0.5·x + (√3/2)·z`. Substituting the closed-form trajectory
-(`x = x₀cos nt`, `z = √3x₀cos nt`) shows this equals `2x₀cos nt` —
-exactly the same sinusoid that already appears as the along-track
-envelope. Paired with `y(t) = -2x₀sin nt`, this traces the orbit as it
-actually looks *within the tilted plane it lies in* (inclined 60° to
-the orbital plane, per the derivation above) — not an illustrative
-approximation, but an exact, distortion-free view. If the
-implementation is correct, this closes into a perfect circle of
-radius `2x₀`.
-
-```elixir
-circular_points =
-  circular_trajectory
-  |> Enum.take_every(10)
-  |> Enum.map(fn {t, s} ->
-    %{
-      "tilted_radial_km" => 0.5 * s.x + :math.sqrt(3) / 2 * s.z,
-      "along_track_km" => s.y,
-      "t_min" => t / 60
-    }
-  end)
-
-Vl.new(
-  width: 340,
-  height: 340,
-  title: "Circular relative orbit, viewed in its own tilted plane"
-)
-|> Vl.data_from_values(circular_points)
-|> Vl.mark(:line, point: false, stroke_width: 2)
-|> Vl.encode_field(:x, "tilted_radial_km",
-  type: :quantitative,
-  title: "In-plane radial (tilted 60° from orbital plane, km)",
-  scale: [zero: false]
-)
-|> Vl.encode_field(:y, "along_track_km",
-  type: :quantitative,
-  title: "Along-track y (km)",
-  scale: [zero: false]
-)
-|> Vl.encode_field(:order, "t_min", type: :quantitative)
 ```
 
 ```elixir

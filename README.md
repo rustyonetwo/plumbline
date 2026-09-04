@@ -1,6 +1,6 @@
 # Plumbline
 
-<!-- TODO(rusty): first-draft README, written before the implementation
+<!-- TODO: first-draft README, written before the implementation
      exists. Needs a real pass once HCW.ex is filled in — at minimum:
      confirm the quickstart commands actually work end-to-end, add the
      talk/video link once ElixirConf happens, reconsider the "status"
@@ -39,7 +39,9 @@ check the notebook itself, which is always current.
 
 | Path | What it is |
 |---|---|
-| `livebooks/hcw_orbital_mechanics.livemd` | **The specification.** Physics narrative, the equations of motion, three invariants derived in full, and executable assertions. Written before any code. |
+| `livebooks/hcw_orbital_mechanics.livemd` | **The specification.** Physics narrative, the equations of motion, three invariants derived in full, and executable assertions. Written before any code. Contains no plotting: a notebook that governs invariants is not also a deliverable. |
+| `livebooks/hcw_visualisation.livemd` | Draws the relative orbits. Judges nothing, gates nothing, and is free to change without re-reviewing the specification. |
+| `bin/run_checkpoint` | Runs a checkpoint notebook headlessly and turns its report into an exit code. |
 | `lib/plumbline/dynamics/hcw.ex` | The implementation, written to satisfy the notebook. |
 | `verify_spec.exs` | A standalone script (no project, no dependencies) that independently checks the notebook's own numeric claims against the closed-form solution. Does not test `lib/`. |
 | `test/` | Unit tests descending from the notebook's invariants — edge cases and boundary values the property assertions don't naturally exercise. |

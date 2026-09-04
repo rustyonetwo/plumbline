@@ -1,62 +1,149 @@
 #!/usr/bin/env bash
-# Runs the HCW notebook headlessly and converts its checkpoint report
-# into a CI-style exit code.
+# Runs a checkpoint notebook headlessly and converts its report into a
+# CI-style exit code.
 #
 # This is what makes "CI runs the actual notebook" literally true: it
 # starts a real Livebook server, deploys the notebook as an app via
 # LIVEBOOK_APPS_PATH (Livebook's own execution path, not an extraction
-# of the notebook's code), lets it run under a timeout, then hands the
-# resulting checkpoint report to bin/check_report.exs.
+# of the notebook's code), lets it run, then hands the resulting report
+# to bin/check_report.exs.
 #
-# Usage: bin/run_checkpoint [timeout_seconds]
+# Usage:
+#   bin/run_checkpoint [--timeout SECONDS] [NOTEBOOK]
+#
+#   NOTEBOOK defaults to livebooks/hcw_orbital_mechanics.livemd.
+#
+# Any notebook that loads livebooks/checkpoint.exs, declares a manifest
+# with Checkpoint.init/1, records results with Checkpoint.check/3 and
+# ends with Checkpoint.complete/0 can be run this way — which is how a
+# second notebook asserting some further invariant gets gated without
+# changing this script.
+#
+# Only the named notebook is deployed: it is copied into a temporary
+# apps directory of its own. Pointing LIVEBOOK_APPS_PATH at livebooks/
+# wholesale would deploy every notebook there, including ones that draw
+# rather than check, and they would race on the same report file.
 #
 # Exits 0 only if the notebook completed (wrote its sentinel) AND every
 # check declared in its manifest is present AND every one is ok:true.
 # Any other outcome — a timeout, an uncaught exception aborting
 # evaluation partway through, a missing check, or a recorded failure —
-# exits 1. See the notebook's "Checkpoint reporting" section (in
-# section 5) for what writes the report, and the companion pdd repo's
-# notes/DECISIONS_PENDING.md (D1) for the design this implements.
+# exits 1.
 
 set -euo pipefail
 
-TIMEOUT="${1:-120}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TIMEOUT=120
+NOTEBOOK="$ROOT_DIR/livebooks/hcw_orbital_mechanics.livemd"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --timeout)
+      TIMEOUT="$2"
+      shift 2
+      ;;
+    -h | --help)
+      sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      NOTEBOOK="$1"
+      shift
+      ;;
+  esac
+done
+
+if [ ! -f "$NOTEBOOK" ]; then
+  echo "No such notebook: $NOTEBOOK" >&2
+  exit 1
+fi
+
+NOTEBOOK="$(cd "$(dirname "$NOTEBOOK")" && pwd)/$(basename "$NOTEBOOK")"
+NOTEBOOK_NAME="$(basename "$NOTEBOOK" .livemd)"
+
+if ! grep -q "Checkpoint.complete" "$NOTEBOOK"; then
+  echo "warning: $NOTEBOOK_NAME never calls Checkpoint.complete/0, so it can" >&2
+  echo "         never report completion. If it is a notebook that draws" >&2
+  echo "         rather than checks, it is not meant to be run this way." >&2
+fi
+
 SERVER_LOG="$(mktemp -t plumbline_checkpoint_server.XXXXXX.log)"
 DATA_PATH="$(mktemp -d -t plumbline_livebook_data.XXXXXX)"
+APPS_PATH="$(mktemp -d -t plumbline_livebook_apps.XXXXXX)"
 PORT="${PLUMBLINE_CHECKPOINT_PORT:-8055}"
 
-# Every run is kept, under reports/, named by UTC start time. The point
-# is the series, not the latest one: reading several in order shows an
+cp "$NOTEBOOK" "$APPS_PATH/"
+
+# Runs are kept, one per notebook, named by UTC start time. The point is
+# the series, not the latest one: read in order they show an
 # implementation converging on the invariants, or regressing away from
 # them. bin/checkpoint_history.exs renders that. reports/ is gitignored
 # — local history, not repository content.
 #
 # PLUMBLINE_REPORT_PATH overrides the location for a one-off run.
-REPORTS_DIR="$ROOT_DIR/reports"
+REPORTS_DIR="$ROOT_DIR/reports/$NOTEBOOK_NAME"
 mkdir -p "$REPORTS_DIR"
 REPORT_PATH="${PLUMBLINE_REPORT_PATH:-$REPORTS_DIR/$(date -u +%Y%m%dT%H%M%SZ).jsonl}"
 
+SERVER_PID=""
+
 cleanup() {
-  rm -rf "$SERVER_LOG" "$DATA_PATH"
+  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+  rm -rf "$SERVER_LOG" "$DATA_PATH" "$APPS_PATH"
 }
 trap cleanup EXIT
 
-echo "Running HCW notebook headlessly (timeout ${TIMEOUT}s)..."
+echo "Running $NOTEBOOK_NAME headlessly (timeout ${TIMEOUT}s)..."
 
 # PLUMBLINE_PROJECT_PATH: in app mode Livebook evaluates an autosaved
 # copy of the notebook, so the notebook's own `__DIR__` points at the
-# autosave directory rather than the repository. The setup cell prefers
-# this variable when it is set.
+# autosave directory rather than the repository. Notebooks prefer this
+# variable when it is set. It is also what makes the copy above safe.
 #
 # LIVEBOOK_DATA_PATH: an isolated, ephemeral data directory, so a run
 # never inherits state from a previous one or from a developer's own
 # Livebook installation.
 PLUMBLINE_REPORT_PATH="$REPORT_PATH" \
 PLUMBLINE_PROJECT_PATH="$ROOT_DIR" \
-LIVEBOOK_APPS_PATH="$ROOT_DIR/livebooks" \
+LIVEBOOK_APPS_PATH="$APPS_PATH" \
 LIVEBOOK_DATA_PATH="$DATA_PATH" \
-  timeout "${TIMEOUT}s" livebook server --port "$PORT" >"$SERVER_LOG" 2>&1 || true
+  livebook server --port "$PORT" >"$SERVER_LOG" 2>&1 &
+SERVER_PID=$!
+
+# Livebook's server never exits on its own — it goes on serving the
+# deployed app indefinitely — so the run has to be ended from out here.
+# Rather than always waiting out the full timeout, poll for the
+# completion sentinel the notebook writes as its last cell and stop as
+# soon as it lands. A run that finishes in 20s then costs 20s, which
+# matters a great deal when iterating.
+#
+# A run that aborts partway (an uncaught exception, e.g. a function that
+# still raises) writes no sentinel and so pays the full timeout. That is
+# unavoidable: an abort leaves no signal to wait for.
+WAITED=0
+COMPLETED=0
+
+while [ "$WAITED" -lt "$TIMEOUT" ]; do
+  if [ -s "$REPORT_PATH" ] && grep -q '"complete"' "$REPORT_PATH" 2>/dev/null; then
+    COMPLETED=1
+    break
+  fi
+
+  kill -0 "$SERVER_PID" 2>/dev/null || break
+
+  sleep 1
+  WAITED=$((WAITED + 1))
+done
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+
+if [ "$COMPLETED" -eq 1 ]; then
+  echo "Notebook finished in ~${WAITED}s."
+else
+  echo "No completion sentinel after ${WAITED}s (timeout ${TIMEOUT}s)."
+fi
 
 echo "--- notebook server log (tail) ---"
 tail -n 40 "$SERVER_LOG" || true

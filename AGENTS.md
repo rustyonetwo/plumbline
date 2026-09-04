@@ -30,14 +30,23 @@ way orbital mechanics does.
 
 `hcw_orbital_mechanics.livemd` is the proof-tier notebook and the
 repository's primary artifact — it is what makes the "proof" in
-proof-driven development an honest word. A second, lower-priority
-notebook may exist alongside it to demonstrate the broader
-invariant-driven tier (see "What this repository is not" for the
-boundary on that). Where the two differ, keep them separate rather
-than merging concerns into one notebook: proving the physics is
-correct and characterising `propagate/4`'s computational behaviour are
-different claims, checked differently, and a reader — or a CI job —
-should be able to run one without the other.
+proof-driven development an honest word.
+
+Notebooks here are kept to one job each, and the rule is worth stating
+plainly: **a notebook that governs invariants is not also a
+deliverable.** The specification changes rarely, is reviewed as
+mathematics, and is what CI gates on; anything that exists to be looked
+at churns on a different clock, and coupling the two means every
+presentational edit lands in the file that defines correctness. So:
+
+| Notebook | Job |
+|---|---|
+| `hcw_orbital_mechanics.livemd` | States the physics, derives the invariants, asserts them. No plotting, and no dependencies beyond this project. |
+| `hcw_visualisation.livemd` | Draws relative orbits. Judges nothing, gates nothing. |
+
+A further notebook asserting some additional invariant belongs
+alongside these rather than folded into either, and is gated the same
+way — see "Verifying your work".
 
 ## The cardinal rule
 
@@ -148,9 +157,17 @@ mix credo --strict    # must be clean
 mix dialyzer          # must be clean
 mix test
 elixir verify_spec.exs  # independent check of the notebook's own claims
-bin/run_checkpoint      # runs the notebook headlessly; exits 0 only if every invariant holds
+bin/run_checkpoint      # runs the specification notebook headlessly; exits 0 only if every invariant holds
 elixir bin/checkpoint_history.exs   # every checkpoint run so far, as a trend
 ```
+
+`bin/run_checkpoint` takes an optional notebook path (default: the
+specification notebook) and deploys only that one. Any notebook that
+loads `livebooks/checkpoint.exs`, declares its checks with
+`Checkpoint.init/1`, records them with `Checkpoint.check/3` and ends
+with `Checkpoint.complete/0` is gated the same way, and keeps its own
+report history under `reports/<notebook name>/`. That is the seam for
+adding an invariant later without touching the tooling.
 
 `verify_spec.exs` is standalone — it needs no project and no
 dependencies, and it validates the notebook's mathematical claims

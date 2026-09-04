@@ -12,10 +12,19 @@
 
 {opts, args, _} = OptionParser.parse(System.argv(), strict: [limit: :integer])
 
+root = Path.dirname(Path.dirname(Path.expand(__ENV__.file)))
+
+# Reports are kept per notebook, under reports/<notebook name>/, so a
+# second notebook checking some further invariant gets its own history
+# rather than interleaving with this one. The argument may be a notebook
+# name or a path to a reports directory.
 reports_dir =
   case args do
-    [dir | _] -> dir
-    [] -> Path.join(Path.dirname(Path.dirname(Path.expand(__ENV__.file))), "reports")
+    [arg | _] ->
+      if File.dir?(arg), do: arg, else: Path.join([root, "reports", arg])
+
+    [] ->
+      Path.join([root, "reports", "hcw_orbital_mechanics"])
   end
 
 limit = Keyword.get(opts, :limit, 12)
