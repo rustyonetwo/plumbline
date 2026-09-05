@@ -188,12 +188,19 @@ failing check does not abort the run, so one pass reports on every
 invariant rather than stopping at the first — and the final cell then
 raises, so a failure is not something a reader can scroll past.
 
-Runs accumulate in `reports/` (gitignored) rather than overwriting, and
+Runs accumulate in `reports/` rather than overwriting, and
 `bin/checkpoint_history.exs` reads them as a trend. Consult it after
 refactoring, not only after adding something: an invariant that was
 passing and now fails is the exact regression this repository is built
 to make visible, and it is far easier to see in a series than in a
 single run.
+
+Reports are committed, every one of them, and must not be pruned or
+hand-picked — a selected subset is weaker evidence than none, because a
+reader applying real rigour would rightly ask what was left out. Each
+run also writes a `.diff` beside its report, capturing the working tree
+that produced it, so a report can be read against the code that
+generated it rather than taken on faith.
 
 Note that dialyzer will legitimately report `no_return` errors while
 functions are stubs that raise. That is correct, not a bug to suppress

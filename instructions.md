@@ -33,6 +33,13 @@ Both plots already exist. Neither draws today because every function in
 is the whole task — you should not need to write any plotting code, or
 to touch either notebook.
 
+These are two deliverables with two different kinds of proof. The
+invariants are **gated**: `bin/run_checkpoint` passes or fails on them,
+and that verdict needs no human. The plots are **not gated** —
+`hcw_visualisation.livemd` never calls `Checkpoint.complete/0`, so the
+checkpoint script cannot run it, and someone has to look at them. Do
+not report the second as done on the strength of the first.
+
 ### The two notebooks are not the same kind of thing
 
 `hcw_orbital_mechanics.livemd` is the **specification**: invariants,
@@ -47,10 +54,15 @@ It is not part of the gate.
 and emits JSON; it renders nothing, so it cannot confirm a plot looks
 right. What it *can* confirm is the numbers those plots are drawn from —
 closure after one period, and a constant radius on the circular orbit —
-and a plot drawn from correct numbers is a correct plot. Treat the
-checkpoint as the gate. If you cannot open the visualisation notebook in
-Livebook yourself, say so in your summary rather than claiming the
-visual deliverable is confirmed; a human opening it is the last step.
+and correct numbers are necessary but not sufficient. The
+`tilted_radial_km` projection in `hcw_visualisation.livemd`, and the
+axis bindings under it, are computed in that notebook rather than in
+`lib/`, so they sit outside the gate entirely: every number can be
+right while the picture is wrong — a swapped axis or a mistyped
+coefficient looks like data, not like a bug. Treat the checkpoint as
+the gate on the physics, and rendering as a separate human step. If you
+cannot open the visualisation notebook in Livebook yourself, say so in
+your summary rather than claiming the visual deliverable is confirmed.
 
 ## Method
 
@@ -116,9 +128,18 @@ Three outcomes are distinguishable, deliberately:
 A failing check does not abort the run, so one pass reports on every
 invariant rather than stopping at the first.
 
-Every run is kept, under `reports/<notebook name>/` (gitignored), named
-by UTC start time — per notebook, so a second checkpoint notebook keeps
-its own history rather than interleaving with this one.
+Every run is kept, under `reports/<notebook name>/`, named by UTC start
+time — per notebook, so a second checkpoint notebook keeps its own
+history rather than interleaving with this one. Reports are committed
+and are not pruned; do not delete them to tidy up, and do not be
+alarmed by a long series of failures, which is what the early part of
+this work is supposed to look like.
+
+Each run also writes a `.diff` next to its report — same basename —
+holding the working tree that produced it, captured before evaluation.
+You do not have to do anything with it; it exists so a run's result can
+be read against the code that produced it. The report's last line
+points at it.
 `bin/checkpoint_history.exs` renders them as a table — rows are
 invariants, columns are runs, oldest first — so you can see an
 invariant getting fixed, and, just as importantly, see one that was

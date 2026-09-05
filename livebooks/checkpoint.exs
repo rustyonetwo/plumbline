@@ -40,6 +40,26 @@ defmodule Checkpoint do
     :persistent_term.put(@failures, [])
 
     if @report_path do
+      # This write truncates, where check/3 appends. That asymmetry is
+      # deliberate and load-bearing, not an inconsistency to tidy away.
+      #
+      # It guarantees a report describes exactly ONE run. The wrapper's
+      # contract is: sentinel present, AND every declared check present,
+      # AND every one true. If records accumulated across runs, a check
+      # that had stopped running could still be "present" and green from
+      # a previous pass — which would quietly gut the completeness half
+      # of that contract.
+      #
+      # Under bin/run_checkpoint this can never bite, because every run
+      # gets a fresh timestamped path. It bites interactively, when the
+      # notebook is re-evaluated in Livebook against a fixed
+      # PLUMBLINE_REPORT_PATH — the one path with no automated gate on
+      # it, which is the worst place for a silent failure to live.
+      #
+      # Truncating would destroy that earlier run, so it is moved aside
+      # first: reports are kept in full, and a run displaced by a re-run
+      # is still a run.
+      archive_existing(@report_path)
       File.write!(@report_path, JSON.encode!(%{"manifest" => check_names}) <> "\n")
     end
 
@@ -103,4 +123,39 @@ defmodule Checkpoint do
   end
 
   defp stringify_keys(details), do: Map.new(details, fn {k, v} -> {to_string(k), v} end)
+
+  # Move a previous report out of the way rather than overwriting it.
+  #
+  # The suffix uses a hyphen rather than a dot so the archived run sorts
+  # *before* the live one ("-" < "." in byte order) — bin/
+  # checkpoint_history.exs sorts report filenames to order the series,
+  # and the displaced run is the older of the two. Zero-padded so the
+  # tenth re-run does not sort between the first and the second.
+  #
+  # Never raises. Failing to archive must not fail a run, and a run that
+  # cannot write its report has a much louder problem than this.
+  defp archive_existing(path) do
+    case File.stat(path) do
+      {:ok, %{size: size}} when size > 0 ->
+        dest = free_archive_name(path, 1)
+
+        case File.rename(path, dest) do
+          :ok ->
+            IO.puts("previous report displaced to #{Path.basename(dest)}")
+
+          {:error, reason} ->
+            IO.puts("WARNING: could not archive #{path} (#{reason}); it will be overwritten")
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp free_archive_name(path, n) do
+    suffix = String.pad_leading(to_string(n), 2, "0")
+    candidate = "#{Path.rootname(path)}-superseded-#{suffix}#{Path.extname(path)}"
+
+    if File.exists?(candidate), do: free_archive_name(path, n + 1), else: candidate
+  end
 end

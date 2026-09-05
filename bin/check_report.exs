@@ -2,8 +2,9 @@
 # Reads a checkpoint report (one JSON object per line) written by the
 # HCW notebook's Checkpoint helper and turns it into a process exit
 # code. See bin/run_checkpoint for how this gets invoked, and
-# notes/DECISIONS_PENDING.md D1 in the companion pdd repo for the
-# design this implements.
+# AGENTS.md's "Verifying your work" section for the contract this
+# implements: a run passes only if the completion sentinel is present,
+# every declared check is recorded, and every check is true.
 #
 # Usage: elixir bin/check_report.exs <path-to-report.jsonl>
 
