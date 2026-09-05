@@ -1,0 +1,8 @@
+{"manifest":["convergence_error_decreases_under_refinement","convergence_order_matches_the_contract","long_horizon_integral_bounded","long_horizon_orbit_still_closes","long_horizon_drift_not_explosive"]}
+{"actual":true,"check":"convergence_error_decreases_under_refinement","expected":true,"message":"every halving of the step must reduce the error, and no error may be exactly zero","ok":true,"unit":"boolean"}
+{"actual":[3.9727,3.9875,3.994,3.997],"check":"convergence_order_matches_the_contract","expected":4.0,"message":"observed convergence order at each refinement; a lower-order method still satisfies every other gate in this repository","ok":true,"tolerance":0.5,"unit":"order"}
+{"actual":8.548113780238006e-11,"check":"long_horizon_integral_bounded","expected":0.0,"message":"spread of J across 100 orbits — RK4 is not symplectic, so this is a bound rather than an equality","ok":true,"tolerance":1.0e-6,"unit":"relative"}
+{"actual":1.6738009618584936e-8,"check":"long_horizon_orbit_still_closes","expected":0.0,"message":"a drift-free orbit must still return to its start after 100 periods, not merely after one","ok":true,"tolerance":0.001,"unit":"km"}
+{"actual":2.0005071248100035,"check":"long_horizon_drift_not_explosive","expected":"~2 (linear)","message":"closure error at 100 orbits against 50 orbits; linear accumulation is fine, compounding is not","ok":true,"tolerance":4.0,"unit":"ratio"}
+{"complete":true}
+{"snapshot":"20260905T224417Z.diff","head":"32a7ebd","diff_sha":"7c9a993f7f9e","dirty":false,"untracked":0}

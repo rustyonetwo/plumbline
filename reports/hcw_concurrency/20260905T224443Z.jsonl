@@ -1,0 +1,7 @@
+{"manifest":["concurrent_matches_sequential","concurrent_result_is_deterministic","shared_input_yields_identical_results","survivors_unaffected_by_sibling_crash"]}
+{"actual":true,"check":"concurrent_matches_sequential","expected":true,"message":"32 trajectories computed concurrently must equal the same trajectories computed one at a time","ok":true,"unit":"boolean"}
+{"actual":true,"check":"concurrent_result_is_deterministic","expected":true,"message":"the identical concurrent workload run twice must produce identical results; disagreement means the answer depends on scheduling","ok":true,"unit":"boolean"}
+{"actual":1,"check":"shared_input_yields_identical_results","expected":1,"message":"32 processes propagating the same state must produce exactly one distinct answer between them","ok":true,"unit":"distinct results"}
+{"actual":true,"check":"survivors_unaffected_by_sibling_crash","expected":true,"message":"tasks that outlive a killed sibling must return exactly what they would have returned alone (30 survivors checked)","ok":true,"unit":"boolean"}
+{"complete":true}
+{"snapshot":"20260905T224443Z.diff","head":"32a7ebd","diff_sha":"6c2e7d9d4109","dirty":false,"untracked":0}
