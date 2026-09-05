@@ -30,8 +30,7 @@ anything. If a plot below looks wrong, the answer is not in this file —
 run the checkpoint against the specification notebook and read the
 numbers.
 
-Read the specification first if you want to know *why* these shapes are
-the right shapes. What follows assumes it.
+Read the specification first if you want to know *why* these shapes are the right shapes. What follows assumes it.
 
 ## Scenario
 
