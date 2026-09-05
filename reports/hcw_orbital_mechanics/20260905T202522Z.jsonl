@@ -1,0 +1,10 @@
+{"manifest":["I1_periodicity","I2_cross_track_decoupling","I3_predicted_value","I3_conservation_drift","rk4_vs_analytic","integrator_independent_of_oracle","circular_orbit_constant_radius"]}
+{"actual":2.737697474751755e-13,"check":"I1_periodicity","expected":0.0,"message":"position closure error after one period","ok":true,"tolerance":0.001,"unit":"km"}
+{"actual":0.0,"check":"I2_cross_track_decoupling","expected":0.0,"message":"exact zero required, not a tolerance — see prose above this section","ok":true,"tolerance":0.0,"unit":"km (+ km/s)"}
+{"actual":6.399952524515015e-7,"check":"I3_predicted_value","expected":6.399952524515016e-7,"message":"J at t=0 vs the analytic prediction 0.5*n^2*x0^2 on the 2:1 ellipse","ok":true,"tolerance":1.0e-9,"unit":"relative error"}
+{"actual":2.580822655822828e-14,"check":"I3_conservation_drift","expected":0.0,"message":"max-min spread of J over one orbit, relative to |J| — a tolerance, not exact zero, because RK4 is not symplectic","ok":true,"tolerance":1.0e-6,"unit":"relative"}
+{"actual":7.055123075626156e-13,"check":"rk4_vs_analytic","expected":0.0,"message":"max position deviation between the RK4 trajectory and the closed-form oracle, sampled at every point","ok":true,"tolerance":0.001,"unit":"km"}
+{"actual":7.055123075626156e-13,"check":"integrator_independent_of_oracle","expected":"> 0","message":"RK4 must accumulate truncation error the closed form does not; a deviation of exactly zero means propagate/4 and analytic/3 are the same computation, not that the integration is perfect","ok":true,"unit":"km"}
+{"actual":1.6986412276764668e-14,"check":"circular_orbit_constant_radius","expected":0.0,"message":"|r| max-min spread over one orbit on the sqrt(3) circular relative orbit","ok":true,"tolerance":1.0e-6,"unit":"relative"}
+{"complete":true}
+{"snapshot":"20260905T202522Z.diff","head":"7b7a925","diff_sha":"4598a7794fcc","dirty":true,"untracked":1}
