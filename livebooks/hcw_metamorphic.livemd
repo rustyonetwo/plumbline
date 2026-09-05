@@ -1,0 +1,280 @@
+<!-- livebook:{"app_settings":{"slug":"hcw-metamorphic","access_type":"public"}} -->
+
+# HCW: Metamorphic Relations
+
+```elixir
+project_path = System.get_env("PLUMBLINE_PROJECT_PATH") || Path.join(__DIR__, "..")
+
+Mix.install([{:plumbline, path: project_path}])
+```
+
+## What this document is
+
+Every other gate in this repository ultimately compares the
+implementation against a known right answer — the closed-form solution
+in `analytic/3`. That is the strongest kind of check available, and it
+is available here only because Hill–Clohessy–Wiltshire happens to have
+a closed form. Most systems worth verifying do not.
+
+**This notebook never calls `analytic/3`.** It checks relations *between
+runs of the implementation*: properties that must hold between two
+outputs regardless of whether anyone can compute what either output
+should be. If the oracle were deleted tomorrow, every assertion here
+would still work.
+
+That is the point. It is the answer to the obvious objection — *my
+domain has no closed form, so none of this applies to me* — and it is
+why the practice generalises past the narrow set of problems with
+textbook solutions. Checks of this shape are called **metamorphic
+relations**, and finding them is usually easier than it looks: they
+tend to fall out of a system's symmetries, its linearity, or the
+algebra of how its operations compose.
+
+Gated separately, with its own history:
+
+```sh
+bin/run_checkpoint livebooks/hcw_metamorphic.livemd
+elixir bin/checkpoint_history.exs hcw_metamorphic
+```
+
+Reversibility is deliberately **not** among the relations below.
+Running the system backwards is not a symmetry it has — the rotating
+frame sees to that — and a check asserting otherwise would be wrong
+rather than strict.
+
+```elixir
+Code.require_file(Path.join(project_path, "livebooks/checkpoint.exs"))
+
+Checkpoint.init([
+  "metamorphic_superposition",
+  "metamorphic_scaling",
+  "metamorphic_time_composition",
+  "metamorphic_along_track_translation"
+])
+```
+
+## Sampling and helpers
+
+Same sampling discipline as `hcw_generality.livemd`: seeded, recorded,
+relative tolerances, separations inside the linearised envelope.
+
+```elixir
+alias Plumbline.Dynamics.HCW
+
+seed = 20_260_905
+:rand.seed(:exsss, {seed, seed, seed})
+
+samples = 50
+steps = 1_000
+
+mu = 398_600.4418
+earth_radius = 6378.137
+r_max = 10.0
+
+uniform = fn lo, hi -> lo + :rand.uniform() * (hi - lo) end
+
+sample_n = fn ->
+  a = earth_radius + uniform.(300.0, 1200.0)
+  :math.sqrt(mu / (a * a * a))
+end
+
+sample_state = fn n ->
+  v = n * r_max
+
+  %HCW.State{
+    x: uniform.(-r_max, r_max),
+    y: uniform.(-r_max, r_max),
+    z: uniform.(-r_max, r_max),
+    vx: uniform.(-v, v),
+    vy: uniform.(-v, v),
+    vz: uniform.(-v, v)
+  }
+end
+
+add = fn a, b ->
+  %HCW.State{
+    x: a.x + b.x,
+    y: a.y + b.y,
+    z: a.z + b.z,
+    vx: a.vx + b.vx,
+    vy: a.vy + b.vy,
+    vz: a.vz + b.vz
+  }
+end
+
+times = fn a, k ->
+  %HCW.State{x: a.x * k, y: a.y * k, z: a.z * k, vx: a.vx * k, vy: a.vy * k, vz: a.vz * k}
+end
+
+magnitude = fn s, n ->
+  :math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z) +
+    :math.sqrt(s.vx * s.vx + s.vy * s.vy + s.vz * s.vz) / n
+end
+
+# Largest state-space separation between two trajectories, positions and
+# velocities together, velocities put on a length footing by dividing by n.
+divergence = fn traj_a, traj_b, n ->
+  Enum.zip(traj_a, traj_b)
+  |> Enum.map(fn {{_, a}, {_, b}} ->
+    :math.sqrt(:math.pow(a.x - b.x, 2) + :math.pow(a.y - b.y, 2) + :math.pow(a.z - b.z, 2)) +
+      :math.sqrt(
+        :math.pow(a.vx - b.vx, 2) + :math.pow(a.vy - b.vy, 2) + :math.pow(a.vz - b.vz, 2)
+      ) / n
+  end)
+  |> Enum.max()
+end
+
+period_of = fn n -> 2 * :math.pi() / n end
+
+%{seed: seed, samples: samples, steps: steps}
+```
+
+## Superposition
+
+The dynamics are linear, so propagating a sum must equal the sum of the
+propagations. Two independent deputies, added together, follow the path
+that a single deputy starting from their combined state would follow.
+
+```elixir
+superposition_worst =
+  for _ <- 1..samples, reduce: 0.0 do
+    worst ->
+      n = sample_n.()
+      a = sample_state.(n)
+      b = sample_state.(n)
+      t = period_of.(n)
+      dt = t / steps
+
+      combined = HCW.propagate(add.(a, b), n, dt, t)
+
+      summed =
+        Enum.zip(HCW.propagate(a, n, dt, t), HCW.propagate(b, n, dt, t))
+        |> Enum.map(fn {{time, pa}, {_, pb}} -> {time, add.(pa, pb)} end)
+
+      max(worst, divergence.(combined, summed, n) / magnitude.(add.(a, b), n))
+  end
+
+Checkpoint.check("metamorphic_superposition", superposition_worst < 1.0e-9,
+  expected: 0.0,
+  actual: superposition_worst,
+  tolerance: 1.0e-9,
+  unit: "relative",
+  message: "propagate(a + b) against propagate(a) + propagate(b), over #{samples} random pairs"
+)
+```
+
+## Scaling
+
+Also linearity, along the other axis: scale the initial state and the
+whole trajectory scales with it. A deputy twice as far out traces the
+same shape, twice the size.
+
+```elixir
+scaling_worst =
+  for _ <- 1..samples, reduce: 0.0 do
+    worst ->
+      n = sample_n.()
+      s = sample_state.(n)
+      k = uniform.(-5.0, 5.0)
+      t = period_of.(n)
+      dt = t / steps
+
+      scaled_then = HCW.propagate(times.(s, k), n, dt, t)
+
+      then_scaled =
+        s |> HCW.propagate(n, dt, t) |> Enum.map(fn {time, p} -> {time, times.(p, k)} end)
+
+      max(worst, divergence.(scaled_then, then_scaled, n) / magnitude.(times.(s, k), n))
+  end
+
+Checkpoint.check("metamorphic_scaling", scaling_worst < 1.0e-9,
+  expected: 0.0,
+  actual: scaling_worst,
+  tolerance: 1.0e-9,
+  unit: "relative",
+  message: "propagate(k * s) against k * propagate(s), over #{samples} random states and factors"
+)
+```
+
+## Composition in time
+
+Propagating for the whole span must equal propagating partway, stopping,
+and continuing from where it stopped. This one is asserted as **exact
+equality**, not within a tolerance: with the same step size, both routes
+perform the identical sequence of arithmetic operations on the identical
+values, so any difference at all means the propagator is doing something
+that depends on where it thinks `t = 0` is.
+
+```elixir
+composition_mismatches =
+  for _ <- 1..samples, reduce: 0 do
+    total ->
+      n = sample_n.()
+      s = sample_state.(n)
+      dt = period_of.(n) / steps
+
+      split = :rand.uniform(steps - 1)
+
+      first = HCW.propagate(s, n, dt, split * dt)
+      {_, midpoint} = List.last(first)
+      second = HCW.propagate(midpoint, n, dt, (steps - split) * dt)
+
+      in_two_parts = first ++ tl(second)
+      in_one_go = HCW.propagate(s, n, dt, steps * dt)
+
+      differing =
+        Enum.zip(in_one_go, in_two_parts)
+        |> Enum.count(fn {{_, a}, {_, b}} -> a != b end)
+
+      total + differing + abs(length(in_one_go) - length(in_two_parts))
+  end
+
+Checkpoint.check("metamorphic_time_composition", composition_mismatches == 0,
+  expected: 0,
+  actual: composition_mismatches,
+  tolerance: 0,
+  unit: "differing states",
+  message: "propagate(s, T1 + T2) against propagate(propagate(s, T1), T2), exact equality required"
+)
+```
+
+## Along-track translation
+
+The along-track coordinate never appears on the right-hand side of the
+equations of motion — only its rate does. Displacing a deputy along-track
+therefore displaces its entire future by the same constant and changes
+nothing else: not the radial motion, not the cross-track motion, not any
+velocity.
+
+```elixir
+translation_worst =
+  for _ <- 1..samples, reduce: 0.0 do
+    worst ->
+      n = sample_n.()
+      s = sample_state.(n)
+      c = uniform.(-r_max, r_max)
+      t = period_of.(n)
+      dt = t / steps
+
+      shift = %HCW.State{y: c}
+
+      shifted_then = HCW.propagate(add.(s, shift), n, dt, t)
+
+      then_shifted =
+        s |> HCW.propagate(n, dt, t) |> Enum.map(fn {time, p} -> {time, add.(p, shift)} end)
+
+      max(worst, divergence.(shifted_then, then_shifted, n) / magnitude.(add.(s, shift), n))
+  end
+
+Checkpoint.check("metamorphic_along_track_translation", translation_worst < 1.0e-9,
+  expected: 0.0,
+  actual: translation_worst,
+  tolerance: 1.0e-9,
+  unit: "relative",
+  message: "an along-track displacement must carry through the trajectory unchanged and affect nothing else"
+)
+```
+
+```elixir
+Checkpoint.complete()
+```

@@ -1,0 +1,12 @@
+# plumbline checkpoint snapshot
+# report:    20260905T211508Z.jsonl
+# notebook:  hcw_metamorphic
+# captured:  2026-09-05T21:15:08Z, before evaluation
+# HEAD:      28cf90d
+#
+# Working-tree changes against HEAD, plus untracked files listed
+# below. This is the exact state the paired report describes.
+#
+# untracked (1):
+#   livebooks/hcw_metamorphic.livemd
+# ----------------------------------------------------------
