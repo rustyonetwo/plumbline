@@ -1,0 +1,263 @@
+<!-- livebook:{"app_settings":{"slug":"hcw-generality","access_type":"public"}} -->
+
+# HCW: Generality of the Invariants
+
+```elixir
+project_path = System.get_env("PLUMBLINE_PROJECT_PATH") || Path.join(__DIR__, "..")
+
+Mix.install([{:plumbline, path: project_path}])
+```
+
+## What this document is
+
+`hcw_orbital_mechanics.livemd` is the specification. It states the
+physics, derives the invariants, and asserts them **at one scenario** —
+a 400 km orbit with a deputy offset 1 km radially.
+
+That is a point assertion. The invariants themselves claim more than
+that: they are properties that hold for *every* valid state, at *every*
+altitude. This notebook asserts the stronger claim, by sampling.
+
+It adds no physics. Every derivation lives in the specification, which
+is frozen and is where the mathematics is reviewed. This notebook only
+widens the set of inputs those results are checked against, so it is
+gated separately and keeps its own history:
+
+```sh
+bin/run_checkpoint livebooks/hcw_generality.livemd
+elixir bin/checkpoint_history.exs hcw_generality
+```
+
+A failure here and a pass in the specification notebook together mean
+something specific: the implementation is correct *at the scenario that
+was checked* and wrong somewhere else in the input space. That is the
+failure mode a fixed-scenario test suite is structurally unable to see.
+
+### On randomness
+
+Sampling makes a run's result depend on which inputs it drew, so the
+seed is fixed and recorded in the report. A red run must be repeatable;
+an unreproducible failure is barely better than no check at all.
+
+```elixir
+Code.require_file(Path.join(project_path, "livebooks/checkpoint.exs"))
+
+Checkpoint.init([
+  "general_I1_periodicity",
+  "general_I2_cross_track_decoupling",
+  "general_I3_conservation",
+  "general_rk4_vs_analytic",
+  "general_integrator_independent_of_oracle"
+])
+```
+
+## Sampling
+
+Altitudes span low Earth orbit; separations stay within the linearised
+model's validity envelope — kilometres against an orbital radius of
+thousands. Velocities are drawn on the natural scale `n · r`, which is
+the speed at which a relative orbit of size `r` is traversed.
+
+```elixir
+alias Plumbline.Dynamics.HCW
+
+seed = 20_260_905
+:rand.seed(:exsss, {seed, seed, seed})
+
+samples = 100
+steps = 2_000
+
+mu = 398_600.4418
+earth_radius = 6378.137
+
+# Separation half-range, km.
+r_max = 10.0
+
+uniform = fn lo, hi -> lo + :rand.uniform() * (hi - lo) end
+
+# Mean motion for a random LEO altitude between 300 and 1200 km.
+sample_n = fn ->
+  a = earth_radius + uniform.(300.0, 1200.0)
+  :math.sqrt(mu / (a * a * a))
+end
+
+sample_state = fn n ->
+  v_max = n * r_max
+
+  %HCW.State{
+    x: uniform.(-r_max, r_max),
+    y: uniform.(-r_max, r_max),
+    z: uniform.(-r_max, r_max),
+    vx: uniform.(-v_max, v_max),
+    vy: uniform.(-v_max, v_max),
+    vz: uniform.(-v_max, v_max)
+  }
+end
+
+# A length scale for the trajectory, so tolerances can be relative.
+# Absolute metres mean something different on a 1 km orbit than on a
+# 20 km one, and a fixed bound would be either toothless or spuriously
+# red depending on the draw.
+scale = fn s, n ->
+  :math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z) +
+    :math.sqrt(s.vx * s.vx + s.vy * s.vy + s.vz * s.vz) / n
+end
+
+period_of = fn n -> 2 * :math.pi() / n end
+
+%{seed: seed, samples: samples, steps_per_orbit: steps}
+```
+
+## I1 — every drift-free orbit closes, at every altitude
+
+The drift-free condition constrains one velocity component and leaves
+the rest of the state free, including cross-track motion, which is
+periodic at the same rate. So the specification's periodicity claim
+should hold for a whole family of states, not the one it asserts.
+
+```elixir
+i1_worst =
+  for _ <- 1..samples, reduce: 0.0 do
+    worst ->
+      n = sample_n.()
+      s = sample_state.(n)
+      # The only constraint: the drift-free condition of I1.
+      s0 = %{s | vy: -2 * n * s.x}
+
+      t = period_of.(n)
+      {_, final} = HCW.propagate(s0, n, t / steps, t) |> List.last()
+
+      closure =
+        :math.sqrt(
+          :math.pow(final.x - s0.x, 2) + :math.pow(final.y - s0.y, 2) +
+            :math.pow(final.z - s0.z, 2)
+        )
+
+      max(worst, closure / scale.(s0, n))
+  end
+
+Checkpoint.check("general_I1_periodicity", i1_worst < 1.0e-6,
+  expected: 0.0,
+  actual: i1_worst,
+  tolerance: 1.0e-6,
+  unit: "relative",
+  message: "worst relative closure error after one period, over #{samples} random drift-free states and altitudes"
+)
+```
+
+## I2 — cross-track stays exactly zero, from any in-plane state
+
+```elixir
+i2_worst =
+  for _ <- 1..samples, reduce: 0.0 do
+    worst ->
+      n = sample_n.()
+      s = sample_state.(n)
+      s0 = %{s | z: 0.0, vz: 0.0}
+
+      t = period_of.(n)
+
+      excursion =
+        s0
+        |> HCW.propagate(n, t / steps, t)
+        |> Enum.map(fn {_, p} -> max(abs(p.z), abs(p.vz)) end)
+        |> Enum.max()
+
+      max(worst, excursion)
+  end
+
+Checkpoint.check("general_I2_cross_track_decoupling", i2_worst == 0.0,
+  expected: 0.0,
+  actual: i2_worst,
+  tolerance: 0.0,
+  unit: "km (+ km/s)",
+  message: "exact zero required — no arithmetic on an in-plane state can produce cross-track motion"
+)
+```
+
+## I3 — the integral is conserved on arbitrary states
+
+No constraint at all here: the states drift, tumble, and never close.
+Conservation on a periodic orbit would be the weaker claim.
+
+```elixir
+i3_worst =
+  for _ <- 1..samples, reduce: 0.0 do
+    worst ->
+      n = sample_n.()
+      s0 = sample_state.(n)
+      t = period_of.(n)
+
+      js =
+        s0
+        |> HCW.propagate(n, t / steps, t)
+        |> Enum.map(fn {_, p} -> HCW.integral(p, n) end)
+
+      # Normalised by a characteristic energy rather than by J itself:
+      # J can pass arbitrarily close to zero on a random state, and
+      # dividing by it would manufacture failures out of nothing.
+      energy = n * n * :math.pow(scale.(s0, n), 2)
+
+      max(worst, (Enum.max(js) - Enum.min(js)) / energy)
+  end
+
+Checkpoint.check("general_I3_conservation", i3_worst < 1.0e-6,
+  expected: 0.0,
+  actual: i3_worst,
+  tolerance: 1.0e-6,
+  unit: "relative",
+  message: "worst spread of J over one orbit, normalised by n^2 * scale^2, over #{samples} arbitrary states"
+)
+```
+
+## The oracle, over the whole sampled space
+
+```elixir
+deviations =
+  for _ <- 1..samples do
+    n = sample_n.()
+    s0 = sample_state.(n)
+    t = period_of.(n)
+
+    s0
+    |> HCW.propagate(n, t / steps, t)
+    |> Enum.map(fn {sample_t, numeric} ->
+      exact = HCW.analytic(s0, n, sample_t)
+
+      :math.sqrt(
+        :math.pow(numeric.x - exact.x, 2) + :math.pow(numeric.y - exact.y, 2) +
+          :math.pow(numeric.z - exact.z, 2)
+      )
+    end)
+    |> Enum.max()
+    |> Kernel./(scale.(s0, n))
+  end
+
+worst_deviation = Enum.max(deviations)
+least_deviation = Enum.min(deviations)
+
+Checkpoint.check("general_rk4_vs_analytic", worst_deviation < 1.0e-6,
+  expected: 0.0,
+  actual: worst_deviation,
+  tolerance: 1.0e-6,
+  unit: "relative",
+  message: "worst relative deviation between RK4 and the closed form, over #{samples} arbitrary states"
+)
+```
+
+Independence has to hold on *every* sampled trajectory, not merely on
+average: the smallest per-trajectory deviation is the one that would go
+to zero if the integrator and the oracle were the same computation.
+
+```elixir
+Checkpoint.check("general_integrator_independent_of_oracle", least_deviation > 0.0,
+  expected: "> 0",
+  actual: least_deviation,
+  unit: "relative",
+  message: "smallest per-trajectory deviation across all samples; zero anywhere means propagate/4 and analytic/3 share code"
+)
+```
+
+```elixir
+Checkpoint.complete()
+```

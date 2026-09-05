@@ -9,13 +9,6 @@ invariants, defines the interface contract, and asserts all of it
 executably. Where this file and the notebook appear to disagree about
 the subject matter, the notebook is right and this file is out of date.
 
-## The two notebooks are not the same kind of thing
-
-| Notebook | Status |
-|---|---|
-| `hcw_orbital_mechanics.livemd` | **Authoritative.** The specification, and what CI gates on. |
-| `hcw_visualisation.livemd` | Draws relative orbits. Judges nothing, gates nothing. |
-
 ## The cardinal rule
 
 **Never edit a notebook to make an assertion pass.**
@@ -35,10 +28,9 @@ decide.
 - **Do not edit anything outside this repository.**
 - **Do not run git commands** — no commits, branches, pushes, pulls,
   or checkouts. Stop and ask if something appears to require one.
-- **Do not edit `hcw_orbital_mechanics.livemd`.** Not its assertions,
-  not its prose. Some of its narrative goes stale as you work; say so
-  in your summary rather than correcting it yourself. The same applies
-  to `README.md`.
+- **Do not edit anything under `livebooks/`.** Not assertions, not
+  prose. Some of it goes stale as you work; say so in your summary
+  rather than correcting it yourself. The same applies to `README.md`.
 - **Invariants first, then implementation, then tests.** Unit tests
   never precede the invariants they descend from. Tests guard specific
   cases; the notebook guards the invariants. Both must be green.

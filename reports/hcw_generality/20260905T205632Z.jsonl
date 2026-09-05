@@ -1,0 +1,2 @@
+{"manifest":["general_I1_periodicity","general_I2_cross_track_decoupling","general_I3_conservation","general_rk4_vs_analytic","general_integrator_independent_of_oracle"]}
+{"snapshot":"20260905T205632Z.diff","head":"7b7a925","diff_sha":"7bff0992b79f","dirty":true,"untracked":1}
