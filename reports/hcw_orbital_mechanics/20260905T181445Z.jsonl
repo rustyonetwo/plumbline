@@ -1,0 +1,9 @@
+{"manifest":["I1_periodicity","I2_cross_track_decoupling","I3_predicted_value","I3_conservation_drift","rk4_vs_analytic","circular_orbit_constant_radius"]}
+{"actual":0.0,"check":"I1_periodicity","expected":0.0,"message":"position closure error after one period","ok":true,"tolerance":0.001,"unit":"km"}
+{"actual":0.0,"check":"I2_cross_track_decoupling","expected":0.0,"message":"exact zero required, not a tolerance — see prose above this section","ok":true,"tolerance":0.0,"unit":"km (+ km/s)"}
+{"actual":6.399952524515015e-7,"check":"I3_predicted_value","expected":6.399952524515016e-7,"message":"J at t=0 vs the analytic prediction 0.5*n^2*x0^2 on the 2:1 ellipse","ok":true,"tolerance":1.0e-9,"unit":"relative error"}
+{"actual":2.580822655822828e-14,"check":"I3_conservation_drift","expected":0.0,"message":"max-min spread of J over one orbit, relative to |J| — a tolerance, not exact zero, because RK4 is not symplectic","ok":true,"tolerance":1.0e-6,"unit":"relative"}
+{"actual":0.0,"check":"rk4_vs_analytic","expected":0.0,"message":"max position deviation between the RK4 trajectory and the closed-form oracle, sampled at every point","ok":true,"tolerance":0.001,"unit":"km"}
+{"actual":1.6986412276764668e-14,"check":"circular_orbit_constant_radius","expected":0.0,"message":"|r| max-min spread over one orbit on the sqrt(3) circular relative orbit","ok":true,"tolerance":1.0e-6,"unit":"relative"}
+{"complete":true}
+{"snapshot":"20260905T181445Z.diff","head":"36a0c80","diff_sha":"cfa82c9885f2","dirty":true,"untracked":1}

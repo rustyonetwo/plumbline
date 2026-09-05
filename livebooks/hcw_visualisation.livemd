@@ -1,4 +1,4 @@
-<!-- livebook:{"app_settings":{"slug":"hcw-vis","access_type":"public"}} -->
+<!-- livebook:{"app_settings":{"access_type":"public","slug":"hcw-vis"}} -->
 
 # Hill–Clohessy–Wiltshire Relative Motion: Visualisation
 
