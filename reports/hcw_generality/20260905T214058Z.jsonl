@@ -1,0 +1,8 @@
+{"manifest":["general_I1_periodicity","general_I2_cross_track_decoupling","general_I3_conservation","general_rk4_vs_analytic","general_integrator_independent_of_oracle"]}
+{"actual":3.947386344986535e-12,"check":"general_I1_periodicity","expected":0.0,"message":"worst relative closure error after one period, over 100 random drift-free states and altitudes","ok":true,"tolerance":1.0e-6,"unit":"relative"}
+{"actual":0.0,"check":"general_I2_cross_track_decoupling","expected":0.0,"message":"exact zero required — no arithmetic on an in-plane state can produce cross-track motion","ok":true,"tolerance":0.0,"unit":"km (+ km/s)"}
+{"actual":2.7336753852834703e-13,"check":"general_I3_conservation","expected":0.0,"message":"worst spread of J over one orbit, normalised by n^2 * scale^2, over 100 arbitrary states","ok":true,"tolerance":1.0e-6,"unit":"relative"}
+{"actual":2.2758635754574823e-11,"check":"general_rk4_vs_analytic","expected":0.0,"message":"worst relative deviation between RK4 and the closed form, over 100 arbitrary states","ok":true,"tolerance":1.0e-6,"unit":"relative"}
+{"actual":2.200820081103796e-12,"check":"general_integrator_independent_of_oracle","expected":"> 0","message":"smallest per-trajectory deviation across all samples; zero anywhere means propagate/4 and analytic/3 share code","ok":true,"unit":"relative"}
+{"complete":true}
+{"snapshot":"20260905T214058Z.diff","head":"0f4cf61","diff_sha":"0f152f7d1763","dirty":false,"untracked":0}

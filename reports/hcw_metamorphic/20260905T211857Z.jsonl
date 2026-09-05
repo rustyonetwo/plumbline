@@ -1,0 +1,7 @@
+{"manifest":["metamorphic_superposition","metamorphic_scaling","metamorphic_time_composition","metamorphic_along_track_translation"]}
+{"actual":4.432683131994364e-13,"check":"metamorphic_superposition","expected":0.0,"message":"propagate(a + b) against propagate(a) + propagate(b), over 50 random pairs","ok":true,"tolerance":1.0e-9,"unit":"relative"}
+{"actual":5.407278402517384e-13,"check":"metamorphic_scaling","expected":0.0,"message":"propagate(k * s) against k * propagate(s), over 50 random states and factors","ok":true,"tolerance":1.0e-9,"unit":"relative"}
+{"actual":0,"check":"metamorphic_time_composition","expected":0,"message":"propagate(s, T1 + T2) against propagate(propagate(s, T1), T2), exact equality required","ok":true,"tolerance":0,"unit":"differing states"}
+{"actual":2.205207156567766e-14,"check":"metamorphic_along_track_translation","expected":0.0,"message":"an along-track displacement must carry through the trajectory unchanged and affect nothing else","ok":true,"tolerance":1.0e-9,"unit":"relative"}
+{"complete":true}
+{"snapshot":"20260905T211857Z.diff","head":"0f4cf61","diff_sha":"45c34a0ac13f","dirty":false,"untracked":0}
