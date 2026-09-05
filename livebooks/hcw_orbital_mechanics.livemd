@@ -3,40 +3,25 @@
 # Hill–Clohessy–Wiltshire Relative Motion: An Executable Specification
 
 ```elixir
-# Where the plumbline project lives, as a path dependency.
-#
-# `__DIR__` is correct when this notebook is opened from disk in the
-# Livebook UI, but NOT when it is deployed headlessly via
-# LIVEBOOK_APPS_PATH: in app mode Livebook evaluates an autosaved copy,
-# so `__DIR__` points at its autosave directory, which has no mix.exs.
-# bin/run_checkpoint sets PLUMBLINE_PROJECT_PATH to close that gap.
+# Set by bin/run_checkpoint; __DIR__ is the fallback when this notebook
+# is opened from disk.
 project_path = System.get_env("PLUMBLINE_PROJECT_PATH") || Path.join(__DIR__, "..")
 
-# No visualisation dependencies here on purpose: this notebook states
-# and checks the physics, and nothing else. Plots live in
-# hcw_visualisation.livemd. Keeping this dependency list to one path
-# entry keeps the headless CI path fast and gives it less to break on.
+# No plotting dependencies here: this notebook states and checks the
+# physics and nothing else. Plots live in hcw_visualisation.livemd.
 Mix.install([{:plumbline, path: project_path}])
 ```
 
 ## What this document is
 
 This notebook is a **specification**, not a test file. It was written
-before any implementation existed, and it states — in narrative, in
-mathematics, and in executable assertions — the properties that any
-correct implementation of Hill–Clohessy–Wiltshire (HCW) relative
-motion must satisfy.
-
-It is intended to be read by three audiences without modification:
-
-1. **A human**, who reads the narrative and the rendered mathematics to
-   understand the domain and to *verify that the equations on this page
-   match the functions that implement them*.
-2. **A coding agent**, which reads the same content to understand what
-   it must build, and which can execute the assertions below to obtain a
-   closed feedback loop it controls itself.
-3. **A CI pipeline**, which executes the notebook headlessly and fails
-   the build if any invariant is violated.
+before any implementation existed, and states — in narrative, in
+mathematics, and in executable assertions — the properties any correct
+implementation of Hill–Clohessy–Wiltshire (HCW) relative motion must
+satisfy. It is meant to be read unmodified by three audiences: a human
+checking that the equations on this page match the functions that
+implement them, an agent building against it, and CI, which runs it
+headlessly and fails the build on any violation.
 
 The unit test suite sits *below* this document. Tests guard specific
 cases — edge conditions, error paths, boundary values. This notebook
@@ -393,14 +378,6 @@ Plumbline.Dynamics.HCW
       The conserved quantity J of invariant I3.
 ```
 
-> #### Deviation from the original brief {: .neutral}
->
-> The brief specified `propagate(state_vector, n, dt)`. That name reads
-> as "advance to a time" but the arity fits a single step. It is split
-> here into `step/3` (one RK4 step) and `propagate/4` (a trajectory),
-> because the notebook needs both and conflating them makes the
-> periodicity assertion ambiguous about what it is testing.
-
 **The implementation may not import, reference, or depend on this
 notebook.** The dependency runs one way. The notebook is the wall; the
 implementation bounces off it.
@@ -417,37 +394,15 @@ implementation bounces off it.
 
 ### Checkpoint reporting
 
-Each assertion below reports its result through a small helper,
-`Checkpoint`, instead of a raw `true = ...` pattern match. This changes
-*how* results are reported, never *what* is checked — every tolerance
-and every comparison below is identical to what a plain assertion would
-check. The helper itself lives in `livebooks/checkpoint.exs`, kept out
-of this document so the physics stays readable, and out of `lib/`
-because it is notebook infrastructure rather than part of the library.
+Each assertion below reports through a helper, `Checkpoint`, rather
+than a raw `true = ...` match. It changes *how* results are reported,
+never *what* is checked: every tolerance and comparison below is
+exactly what a plain assertion would test. `check/3` does not raise, so
+one pass reports every invariant instead of stopping at the first;
+`complete/0`, the final cell, raises if any failed.
 
-What it buys:
-
-1. **One pass reports every invariant.** `check/3` does not raise, so a
-   failed invariant doesn't hide the ones after it — useful while an
-   implementation satisfies some and not others.
-2. **A failure is still impossible to miss.** The final cell,
-   `Checkpoint.complete/0`, raises if anything failed. Interactively
-   that is a red cell naming the failed checks; the run does not end
-   quietly green.
-3. **When `PLUMBLINE_REPORT_PATH` is set**, each result is also
-   appended as one JSON line to that path, with its expected, actual and
-   tolerance values, and `complete/0` writes a completion sentinel
-   before raising. `bin/run_checkpoint` uses this to run the notebook
-   headlessly through Livebook's own execution path and turn the report
-   into a CI exit code — which is what makes "CI runs the actual
-   notebook" true rather than aspirational.
-
-Three outcomes are deliberately distinguishable. Every check present and
-true is a pass. A recorded `"ok": false` means the code ran but the
-physics is wrong, and names which invariant. A *missing* sentinel means
-evaluation aborted on an uncaught exception — which is what you get
-while the functions are still stubs that raise — and is a different
-failure from an assertion that didn't hold.
+The helper is in `livebooks/checkpoint.exs`, and `AGENTS.md` documents
+how `bin/run_checkpoint` turns its output into a CI exit code.
 
 ```elixir
 Code.require_file(Path.join(project_path, "livebooks/checkpoint.exs"))
@@ -460,6 +415,7 @@ Checkpoint.init([
   "I3_predicted_value",
   "I3_conservation_drift",
   "rk4_vs_analytic",
+  "integrator_independent_of_oracle",
   "circular_orbit_constant_radius"
 ])
 ```
@@ -520,9 +476,9 @@ length(trajectory)
 ### Assertion I1 — periodicity
 
 Position error after exactly one period, against a 1 metre tolerance.
-Expected actual error at this step size is of order centimetres; the
-tolerance is deliberately loose, because it exists to catch *physics*
-errors, not to police integrator accuracy.
+The tolerance is deliberately loose: it exists to catch *physics*
+errors, not to police integrator accuracy, which at this step size is
+finer than the tolerance by many orders of magnitude.
 
 ```elixir
 position_error =
@@ -547,7 +503,9 @@ IO.puts("I1  velocity error: #{Float.round(velocity_error * 1_000_000, 4)} mm/s"
 
 Checkpoint.check("I1_periodicity", position_error < position_tolerance,
   expected: 0.0,
-  actual: Float.round(position_error, 9),
+  # Unrounded: rounding would print 0.0 for both a correct integration
+  # and one that never integrated. The distinguishing digits are the point.
+  actual: position_error,
   tolerance: position_tolerance,
   unit: "km",
   message: "position closure error after one period"
@@ -626,6 +584,18 @@ solution at every sample. Two independent derivations agreeing at all
 5,000 points is a much stronger statement than agreement at the
 endpoint alone.
 
+The deviation must be small. It must also be **nonzero**.
+
+RK4 accumulates truncation error; the closed form does not, so two
+genuinely independent computations disagree very slightly — and that
+disagreement is the evidence that they are independent. Exactly zero
+would not mean the integration is unusually good. It would mean
+`propagate/4` and `analytic/3` are one computation, and that this
+cross-check compares a value against itself. Every other assertion here
+would still pass: periodicity would hold by construction and $J$ would
+be conserved exactly. The second check is what makes the oracle's
+independence asserted rather than assumed.
+
 ```elixir
 max_deviation =
   trajectory
@@ -644,10 +614,19 @@ IO.puts("RK4 vs analytic, max deviation: #{Float.round(max_deviation * 1000, 6)}
 
 Checkpoint.check("rk4_vs_analytic", max_deviation < 1.0e-3,
   expected: 0.0,
-  actual: Float.round(max_deviation, 9),
+  # Unrounded — see the note on I1.
+  actual: max_deviation,
   tolerance: 1.0e-3,
   unit: "km",
   message: "max position deviation between the RK4 trajectory and the closed-form oracle, sampled at every point"
+)
+
+Checkpoint.check("integrator_independent_of_oracle", max_deviation > 0.0,
+  expected: "> 0",
+  actual: max_deviation,
+  unit: "km",
+  message:
+    "RK4 must accumulate truncation error the closed form does not; a deviation of exactly zero means propagate/4 and analytic/3 are the same computation, not that the integration is perfect"
 )
 ```
 

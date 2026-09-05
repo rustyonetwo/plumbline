@@ -18,9 +18,11 @@ Nobody in an audience can eyeball-verify orbital mechanics, which is
 the point — the notebook has to actually prove it, not just look
 plausible.
 
-Full explanation of the pattern, the rules this repository follows,
-and the specific physics traps a naive implementation falls into: see
-[`AGENTS.md`](AGENTS.md).
+The physics, the invariants and their derivations are all in the
+specification notebook itself — deliberately, since a repository about
+single-source-of-truth should not keep a second copy of its own
+subject. For the rules this repository works under, and how the
+notebook is run as a gate, see [`AGENTS.md`](AGENTS.md).
 
 ## Status
 
@@ -45,7 +47,8 @@ check the notebook itself, which is always current.
 | `lib/plumbline/dynamics/hcw.ex` | The implementation, written to satisfy the notebook. |
 | `verify_spec.exs` | A standalone script (no project, no dependencies) that independently checks the notebook's own numeric claims against the closed-form solution. Does not test `lib/`. |
 | `test/` | Unit tests descending from the notebook's invariants — edge cases and boundary values the property assertions don't naturally exercise. |
-| `AGENTS.md` | The rules: what this repository is, the cardinal rule (never edit the notebook to make an assertion pass), and the specific domain traps a plausible-looking implementation can fall into. |
+| `AGENTS.md` | The bounds an agent works within — the cardinal rule (never edit the notebook to make an assertion pass), what may and may not be changed, and the checkpoint cycle. Contains nothing about the physics; that lives in the notebook. |
+| `instructions.md` | The brief handed to the implementing agent: the task, where things are, and what "done" means. |
 
 ## Running it
 

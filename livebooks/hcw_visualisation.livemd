@@ -30,7 +30,8 @@ anything. If a plot below looks wrong, the answer is not in this file —
 run the checkpoint against the specification notebook and read the
 numbers.
 
-Read the specification first if you want to know *why* these shapes are the right shapes. What follows assumes it.
+Read the specification first if you want to know *why* these shapes are
+the right shapes. What follows assumes it, and does not re-derive it.
 
 ## Scenario
 
@@ -61,17 +62,14 @@ x0 = 1.0
 }
 ```
 
-## The 2:1 ellipse
+## The drift-free in-plane orbit
 
-The drift-free in-plane orbit: radial offset `x₀`, along-track velocity
-`ẏ₀ = -2n·x₀`, no cross-track motion.
+The drift-free in-plane orbit, in the conventional LVLH orientation:
+along-track on the horizontal axis, radial on the vertical.
 
-Plotted in the conventional LVLH orientation — along-track on the
-horizontal axis, radial on the vertical. A correct implementation
-produces a closed ellipse whose horizontal extent is exactly twice its
-vertical extent. An implementation that has broken the Coriolis coupling
-produces a spiral instead, and the failure is visible without reading a
-single number.
+A correct implementation draws a closed ellipse. One that has broken the
+coupling between the axes draws a spiral, and the failure is visible
+without reading a single number.
 
 ```elixir
 initial = %HCW.State{
@@ -79,7 +77,6 @@ initial = %HCW.State{
   y: 0.0,
   z: 0.0,
   vx: 0.0,
-  # The drift-free condition. On the along-track velocity, not the radial one.
   vy: -2 * n * x0,
   vz: 0.0
 }
@@ -108,19 +105,78 @@ Vl.new(width: 520, height: 320, title: "Relative motion in the LVLH plane (one o
 |> Vl.encode_field(:order, "t_min", type: :quantitative)
 ```
 
+## One character, thirty-seven kilometres
+
+The drift-free condition belongs to one velocity component. Applied to
+the other, it is a transposed subscript — one character, and it passes
+code review. The specification derives which component, and what the
+transposition costs per orbit.
+
+Both trajectories below come from the same `propagate/4`. Only the
+initial state differs.
+
+```elixir
+transposed = %HCW.State{
+  x: x0,
+  y: 0.0,
+  z: 0.0,
+  vx: -2 * n * x0,
+  vy: 0.0,
+  vz: 0.0
+}
+
+both_cases = fn span ->
+  for {state, label} <- [{initial, "drift-free (vy₀)"}, {transposed, "transposed (vx₀)"}],
+      {t, s} <- state |> HCW.propagate(n, dt, span) |> Enum.take_every(5) do
+    %{"along_track_km" => s.y, "radial_km" => s.x, "t_min" => t / 60, "case" => label}
+  end
+end
+
+compare = fn points, title ->
+  Vl.new(width: 520, height: 320, title: title)
+  |> Vl.data_from_values(points)
+  |> Vl.mark(:line, point: false, stroke_width: 2)
+  |> Vl.encode_field(:x, "along_track_km",
+    type: :quantitative,
+    title: "Along-track y (km)",
+    scale: [zero: false]
+  )
+  |> Vl.encode_field(:y, "radial_km",
+    type: :quantitative,
+    title: "Radial x (km)",
+    scale: [zero: false]
+  )
+  |> Vl.encode_field(:color, "case", type: :nominal, title: nil)
+  |> Vl.encode_field(:order, "t_min", type: :quantitative)
+end
+
+compare.(both_cases.(600.0), "First ten minutes — the two are indistinguishable")
+```
+
+That is the entire problem. Ten minutes in, on a plot, by eye, in a
+short-window unit test, the wrong trajectory is the right trajectory.
+
+The same two initial states over one full orbit. Watch the horizontal
+axis: the correct orbit stays bounded, so at this scale it collapses to
+a sliver near zero while the other walks off the plot and does not come
+back.
+
+```elixir
+compare.(both_cases.(period), "One orbit later")
+```
+
 ## The circular relative orbit
 
-Adding cross-track motion at `z₀ = √3·x₀`, in phase with the radial
-motion, turns the 2:1 ellipse into a genuine circle of radius `2x₀` —
-lying in a plane inclined 60° to the orbital plane.
+Adding cross-track motion, in phase with the radial motion, turns the
+ellipse above into a genuine circle lying in a plane tilted out of the
+orbital plane. The specification's bonus section gives the condition and
+the resulting radius.
 
-Projected onto plain `(x, y)` this would look like the *same* ellipse as
-above, because `z` doesn't appear in those two axes at all. So the plot
-below uses a different combination: `0.5·x + (√3/2)·z`. Substituting the
-closed-form trajectory (`x = x₀cos nt`, `z = √3x₀cos nt`) shows this
-equals `2x₀cos nt`, exactly the sinusoid that appears as the along-track
-envelope. Paired with `y(t)`, it shows the orbit as it actually looks
-*within the tilted plane it occupies* — an exact view, not an
+Projected onto plain `(x, y)` it would look like the *same* ellipse as
+above, since `z` appears in neither axis. The plot below therefore uses
+a combination of `x` and `z` chosen so the horizontal axis lies in the
+orbit's own plane. Paired with `y(t)`, that shows the orbit as it
+actually looks *within the plane it occupies* — an exact view, not an
 illustrative approximation.
 
 ```elixir
@@ -154,7 +210,7 @@ Vl.new(
 |> Vl.mark(:line, point: false, stroke_width: 2)
 |> Vl.encode_field(:x, "tilted_radial_km",
   type: :quantitative,
-  title: "In-plane radial (tilted 60° from orbital plane, km)",
+  title: "In-plane radial (within the orbit's own plane, km)",
   scale: [zero: false]
 )
 |> Vl.encode_field(:y, "along_track_km",
