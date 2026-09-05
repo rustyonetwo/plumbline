@@ -1,0 +1,2 @@
+{"manifest":["I1_periodicity","I2_cross_track_decoupling","I3_predicted_value","I3_conservation_drift","rk4_vs_analytic","circular_orbit_constant_radius"]}
+{"snapshot":"20260905T161527Z.diff","head":"3558744","diff_sha":"87d854c33fcd","dirty":true,"untracked":1}

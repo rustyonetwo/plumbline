@@ -1,0 +1,209 @@
+# plumbline checkpoint snapshot
+# report:    20260905T161527Z.jsonl
+# notebook:  hcw_orbital_mechanics
+# captured:  2026-09-05T16:15:27Z, before evaluation
+# HEAD:      3558744
+#
+# Working-tree changes against HEAD, plus untracked files listed
+# below. This is the exact state the paired report describes.
+#
+# untracked (1):
+#   reports/hcw_orbital_mechanics/20260905T005456Z.jsonl
+# ----------------------------------------------------------
+diff --git a/.gitignore b/.gitignore
+index 9c8e423..44cb0e7 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -27,11 +27,16 @@ plumbline-*.tar
+ /.lexical/
+ /.expert/
+ 
+-# Checkpoint reports written by bin/run_checkpoint — one per run, kept so
+-# convergence (or regression) across runs can be read with
+-# bin/checkpoint_history.exs. Local history, not repository content;
+-# commit one deliberately if it is worth keeping as an artifact.
+-/reports/
++# Checkpoint reports written by bin/run_checkpoint are deliberately NOT
++# ignored. One file per run, read as a series by bin/checkpoint_history.exs.
++#
++# Do not add them here, and do not prune them. The value of the series is
++# that it is complete: every run, including the aborted ones, the failing
++# ones, and the ones that were flailing at tooling rather than physics. A
++# hand-picked subset would be weaker evidence than none at all, because a
++# reader applying real rigour would rightly ask what was left out. The
++# history script already labels aborted, failed and passing runs
++# distinctly, so a complete record renders legibly without curation.
+ 
+ # Dialyzer PLTs (large binaries, rebuilt per toolchain).
+ /priv/plts/
+diff --git a/bin/check_report.exs b/bin/check_report.exs
+index db53548..e734b27 100755
+--- a/bin/check_report.exs
++++ b/bin/check_report.exs
+@@ -2,8 +2,9 @@
+ # Reads a checkpoint report (one JSON object per line) written by the
+ # HCW notebook's Checkpoint helper and turns it into a process exit
+ # code. See bin/run_checkpoint for how this gets invoked, and
+-# notes/DECISIONS_PENDING.md D1 in the companion pdd repo for the
+-# design this implements.
++# AGENTS.md's "Verifying your work" section for the contract this
++# implements: a run passes only if the completion sentinel is present,
++# every declared check is recorded, and every check is true.
+ #
+ # Usage: elixir bin/check_report.exs <path-to-report.jsonl>
+ 
+diff --git a/bin/run_checkpoint b/bin/run_checkpoint
+index 189f540..179beca 100755
+--- a/bin/run_checkpoint
++++ b/bin/run_checkpoint
+@@ -77,14 +77,82 @@ cp "$NOTEBOOK" "$APPS_PATH/"
+ # Runs are kept, one per notebook, named by UTC start time. The point is
+ # the series, not the latest one: read in order they show an
+ # implementation converging on the invariants, or regressing away from
+-# them. bin/checkpoint_history.exs renders that. reports/ is gitignored
+-# — local history, not repository content.
++# them. bin/checkpoint_history.exs renders that. Reports are committed,
++# deliberately and in full — see .gitignore for why they must not be
++# pruned or hand-picked.
+ #
+ # PLUMBLINE_REPORT_PATH overrides the location for a one-off run.
+ REPORTS_DIR="$ROOT_DIR/reports/$NOTEBOOK_NAME"
+ mkdir -p "$REPORTS_DIR"
+ REPORT_PATH="${PLUMBLINE_REPORT_PATH:-$REPORTS_DIR/$(date -u +%Y%m%dT%H%M%SZ).jsonl}"
+ 
++# Provenance: capture the working tree that produced this run.
++#
++# A report is only interpretable against the code that produced it.
++# Agents working in this repository do not make commits, so there is no
++# commit to anchor a run to — and anchoring to commits would be worse
++# anyway, since commits are curated by definition and would reintroduce
++# the selection bias that keeping every report exists to avoid. So each
++# run captures its own diff, written beside the report and named to
++# match it: 20260101T000000Z.jsonl pairs with 20260101T000000Z.diff.
++#
++# Captured BEFORE evaluation, deliberately — the tree that produced the
++# result is the one at launch, not whatever it has become by the time
++# the run ends. The pointer into the report is appended AFTER, because
++# Checkpoint.init/1 truncates the report file and would destroy anything
++# written ahead of it.
++#
++# Every git call here is read-only (rev-parse, diff, status, ls-files,
++# hash-object) and every one is guarded. On a machine with no git, or an
++# unpacked download that is not a repository, provenance is skipped and
++# the checkpoint runs normally. Capturing provenance must never be able
++# to fail a run — `set -e` would otherwise turn a missing git into a
++# failed invariant, which is a lie.
++SNAPSHOT_PATH="${REPORT_PATH%.jsonl}.diff"
++SNAPSHOT_WRITTEN=0
++GIT_HEAD=""
++DIFF_SHA=""
++UNTRACKED_COUNT=0
++DIRTY=false
++
++if git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
++  GIT_HEAD="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "")"
++  UNTRACKED_LIST="$(git -C "$ROOT_DIR" ls-files --others --exclude-standard 2>/dev/null || true)"
++  UNTRACKED_COUNT="$(printf '%s' "$UNTRACKED_LIST" | grep -c . || true)"
++
++  {
++    echo "# plumbline checkpoint snapshot"
++    echo "# report:    $(basename "$REPORT_PATH")"
++    echo "# notebook:  $NOTEBOOK_NAME"
++    echo "# captured:  $(date -u +%Y-%m-%dT%H:%M:%SZ), before evaluation"
++    echo "# HEAD:      ${GIT_HEAD:-<no commits>}"
++    echo "#"
++    echo "# Working-tree changes against HEAD, plus untracked files listed"
++    echo "# below. This is the exact state the paired report describes."
++
++    if [ "$UNTRACKED_COUNT" -gt 0 ]; then
++      echo "#"
++      echo "# untracked ($UNTRACKED_COUNT):"
++      printf '%s\n' "$UNTRACKED_LIST" | sed 's/^/#   /'
++    fi
++
++    echo "# ----------------------------------------------------------"
++
++    if [ -n "$GIT_HEAD" ]; then
++      git -C "$ROOT_DIR" diff HEAD 2>/dev/null || true
++    fi
++  } >"$SNAPSHOT_PATH"
++
++  SNAPSHOT_WRITTEN=1
++  DIFF_SHA="$(git -C "$ROOT_DIR" hash-object "$SNAPSHOT_PATH" 2>/dev/null | cut -c1-12 || echo "")"
++
++  if [ -n "$GIT_HEAD" ] && ! git -C "$ROOT_DIR" diff --quiet HEAD 2>/dev/null; then
++    DIRTY=true
++  elif [ "$UNTRACKED_COUNT" -gt 0 ]; then
++    DIRTY=true
++  fi
++fi
++
+ SERVER_PID=""
+ 
+ cleanup() {
+@@ -145,10 +213,26 @@ else
+   echo "No completion sentinel after ${WAITED}s (timeout ${TIMEOUT}s)."
+ fi
+ 
++# The pointer to the snapshot goes in now rather than before the run,
++# because Checkpoint.init/1 truncates the report file on its way past.
++# Appended unconditionally, including when the notebook produced no
++# report at all: a run that failed to start is still a run, and its
++# snapshot is still the state that failed to start. checkpoint_history
++# renders such a report as "no manifest" rather than hiding it.
++if [ "$SNAPSHOT_WRITTEN" -eq 1 ]; then
++  printf '{"snapshot":"%s","head":"%s","diff_sha":"%s","dirty":%s,"untracked":%s}\n' \
++    "$(basename "$SNAPSHOT_PATH")" "$GIT_HEAD" "$DIFF_SHA" "$DIRTY" "$UNTRACKED_COUNT" \
++    >>"$REPORT_PATH"
++fi
++
+ echo "--- notebook server log (tail) ---"
+ tail -n 40 "$SERVER_LOG" || true
+ echo "-----------------------------------"
+-echo "report: $REPORT_PATH"
++echo "report:   $REPORT_PATH"
++
++if [ "$SNAPSHOT_WRITTEN" -eq 1 ]; then
++  echo "snapshot: $SNAPSHOT_PATH  (HEAD ${GIT_HEAD:-none}, diff ${DIFF_SHA:-none})"
++fi
+ 
+ # check_report.exs halts non-zero on failure, and `set -e` ends the
+ # script there, so the report path is printed above this line rather
+diff --git a/instructions.md b/instructions.md
+index ba57d93..5e261e6 100644
+--- a/instructions.md
++++ b/instructions.md
+@@ -33,6 +33,13 @@ Both plots already exist. Neither draws today because every function in
+ is the whole task — you should not need to write any plotting code, or
+ to touch either notebook.
+ 
++These are two deliverables with two different kinds of proof. The
++invariants are **gated**: `bin/run_checkpoint` passes or fails on them,
++and that verdict needs no human. The plots are **not gated** —
++`hcw_visualisation.livemd` never calls `Checkpoint.complete/0`, so the
++checkpoint script cannot run it, and someone has to look at them. Do
++not report the second as done on the strength of the first.
++
+ ### The two notebooks are not the same kind of thing
+ 
+ `hcw_orbital_mechanics.livemd` is the **specification**: invariants,
+@@ -47,10 +54,15 @@ It is not part of the gate.
+ and emits JSON; it renders nothing, so it cannot confirm a plot looks
+ right. What it *can* confirm is the numbers those plots are drawn from —
+ closure after one period, and a constant radius on the circular orbit —
+-and a plot drawn from correct numbers is a correct plot. Treat the
+-checkpoint as the gate. If you cannot open the visualisation notebook in
+-Livebook yourself, say so in your summary rather than claiming the
+-visual deliverable is confirmed; a human opening it is the last step.
++and correct numbers are necessary but not sufficient. The
++`tilted_radial_km` projection in `hcw_visualisation.livemd`, and the
++axis bindings under it, are computed in that notebook rather than in
++`lib/`, so they sit outside the gate entirely: every number can be
++right while the picture is wrong — a swapped axis or a mistyped
++coefficient looks like data, not like a bug. Treat the checkpoint as
++the gate on the physics, and rendering as a separate human step. If you
++cannot open the visualisation notebook in Livebook yourself, say so in
++your summary rather than claiming the visual deliverable is confirmed.
+ 
+ ## Method
+ 

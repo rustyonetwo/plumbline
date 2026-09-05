@@ -1,0 +1,42 @@
+# The directory Mix will write compiled artifacts to.
+/_build/
+
+# If you run "mix test --cover", coverage assets end up here.
+/cover/
+
+# The directory Mix downloads your dependencies sources to.
+/deps/
+
+# Where third-party dependencies like ExDoc output generated docs.
+/doc/
+
+# Temporary files, for example, from tests.
+/tmp/
+
+# If the VM crashes, it generates a dump, let's ignore it too.
+erl_crash.dump
+
+# Also ignore archive artifacts (built via "mix archive.build").
+*.ez
+
+# Ignore package tarball (built via "mix hex.build").
+plumbline-*.tar
+
+# Editor / language server
+/.elixir_ls/
+/.lexical/
+/.expert/
+
+# Checkpoint reports written by bin/run_checkpoint are deliberately NOT
+# ignored. One file per run, read as a series by bin/checkpoint_history.exs.
+#
+# Do not add them here, and do not prune them. The value of the series is
+# that it is complete: every run, including the aborted ones, the failing
+# ones, and the ones that were flailing at tooling rather than physics. A
+# hand-picked subset would be weaker evidence than none at all, because a
+# reader applying real rigour would rightly ask what was left out. The
+# history script already labels aborted, failed and passing runs
+# distinctly, so a complete record renders legibly without curation.
+
+# Dialyzer PLTs (large binaries, rebuilt per toolchain).
+/priv/plts/

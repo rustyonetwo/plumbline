@@ -1,0 +1,222 @@
+<!-- livebook:{"app_settings":{"slug":"hcw-vis","access_type":"public"}} -->
+
+# Hill–Clohessy–Wiltshire Relative Motion: Visualisation
+
+```elixir
+# See hcw_orbital_mechanics.livemd's setup cell for why the project path
+# is taken from the environment before falling back to __DIR__.
+project_path = System.get_env("PLUMBLINE_PROJECT_PATH") || Path.join(__DIR__, "..")
+
+Mix.install([
+  {:plumbline, path: project_path},
+  {:vega_lite, "~> 0.1"},
+  {:kino, "~> 0.14"},
+  {:kino_vega_lite, "~> 0.1"}
+])
+```
+
+## What this document is
+
+This notebook **draws** relative orbits. It does not judge them.
+
+The invariants — what a correct implementation must satisfy, and why —
+live in `hcw_orbital_mechanics.livemd`, along with their derivations and
+the executable assertions that check them. That document is the
+specification, and it is deliberately kept free of plotting: it changes
+rarely, it is reviewed as mathematics, and CI runs it as a gate.
+
+This one is free to change as often as it likes. Nothing here gates
+anything. If a plot below looks wrong, the answer is not in this file —
+run the checkpoint against the specification notebook and read the
+numbers.
+
+Read the specification first if you want to know *why* these shapes are
+the right shapes. What follows assumes it, and does not re-derive it.
+
+## Scenario
+
+A 400 km circular low Earth orbit, with a deputy offset 1 km radially —
+the same scenario the specification notebook asserts against.
+
+```elixir
+alias Plumbline.Dynamics.HCW
+alias VegaLite, as: Vl
+
+# WGS-84 / EGM-96 Earth gravitational parameter, km^3/s^2.
+mu = 398_600.4418
+
+# Equatorial radius + altitude, km.
+a = 6378.137 + 400.0
+
+# Mean motion (rad/s) and orbital period (s).
+n = :math.sqrt(mu / (a * a * a))
+period = 2 * :math.pi() / n
+
+steps = 5_000
+dt = period / steps
+x0 = 1.0
+
+%{
+  mean_motion_rad_s: n,
+  period_min: Float.round(period / 60, 3)
+}
+```
+
+## The drift-free in-plane orbit
+
+The drift-free in-plane orbit, in the conventional LVLH orientation:
+along-track on the horizontal axis, radial on the vertical.
+
+A correct implementation draws a closed ellipse. One that has broken the
+coupling between the axes draws a spiral, and the failure is visible
+without reading a single number.
+
+```elixir
+initial = %HCW.State{
+  x: x0,
+  y: 0.0,
+  z: 0.0,
+  vx: 0.0,
+  vy: -2 * n * x0,
+  vz: 0.0
+}
+
+points =
+  initial
+  |> HCW.propagate(n, dt, period)
+  |> Enum.take_every(10)
+  |> Enum.map(fn {t, s} ->
+    %{"along_track_km" => s.y, "radial_km" => s.x, "t_min" => t / 60}
+  end)
+
+Vl.new(width: 520, height: 320, title: "Relative motion in the LVLH plane (one orbit)")
+|> Vl.data_from_values(points)
+|> Vl.mark(:line, point: false, stroke_width: 2)
+|> Vl.encode_field(:x, "along_track_km",
+  type: :quantitative,
+  title: "Along-track y (km)",
+  scale: [zero: false]
+)
+|> Vl.encode_field(:y, "radial_km",
+  type: :quantitative,
+  title: "Radial x (km)",
+  scale: [zero: false]
+)
+|> Vl.encode_field(:order, "t_min", type: :quantitative)
+```
+
+## One character, thirty-seven kilometres
+
+The drift-free condition belongs to one velocity component. Applied to
+the other, it is a transposed subscript — one character, and it passes
+code review. The specification derives which component, and what the
+transposition costs per orbit.
+
+Both trajectories below come from the same `propagate/4`. Only the
+initial state differs.
+
+```elixir
+transposed = %HCW.State{
+  x: x0,
+  y: 0.0,
+  z: 0.0,
+  vx: -2 * n * x0,
+  vy: 0.0,
+  vz: 0.0
+}
+
+both_cases = fn span ->
+  for {state, label} <- [{initial, "drift-free (vy₀)"}, {transposed, "transposed (vx₀)"}],
+      {t, s} <- state |> HCW.propagate(n, dt, span) |> Enum.take_every(5) do
+    %{"along_track_km" => s.y, "radial_km" => s.x, "t_min" => t / 60, "case" => label}
+  end
+end
+
+compare = fn points, title ->
+  Vl.new(width: 520, height: 320, title: title)
+  |> Vl.data_from_values(points)
+  |> Vl.mark(:line, point: false, stroke_width: 2)
+  |> Vl.encode_field(:x, "along_track_km",
+    type: :quantitative,
+    title: "Along-track y (km)",
+    scale: [zero: false]
+  )
+  |> Vl.encode_field(:y, "radial_km",
+    type: :quantitative,
+    title: "Radial x (km)",
+    scale: [zero: false]
+  )
+  |> Vl.encode_field(:color, "case", type: :nominal, title: nil)
+  |> Vl.encode_field(:order, "t_min", type: :quantitative)
+end
+
+compare.(both_cases.(600.0), "First ten minutes — the two are indistinguishable")
+```
+
+That is the entire problem. Ten minutes in, on a plot, by eye, in a
+short-window unit test, the wrong trajectory is the right trajectory.
+
+The same two initial states over one full orbit. Watch the horizontal
+axis: the correct orbit stays bounded, so at this scale it collapses to
+a sliver near zero while the other walks off the plot and does not come
+back.
+
+```elixir
+compare.(both_cases.(period), "One orbit later")
+```
+
+## The circular relative orbit
+
+Adding cross-track motion, in phase with the radial motion, turns the
+ellipse above into a genuine circle lying in a plane tilted out of the
+orbital plane. The specification's bonus section gives the condition and
+the resulting radius.
+
+Projected onto plain `(x, y)` it would look like the *same* ellipse as
+above, since `z` appears in neither axis. The plot below therefore uses
+a combination of `x` and `z` chosen so the horizontal axis lies in the
+orbit's own plane. Paired with `y(t)`, that shows the orbit as it
+actually looks *within the plane it occupies* — an exact view, not an
+illustrative approximation.
+
+```elixir
+circular = %HCW.State{
+  x: x0,
+  y: 0.0,
+  z: :math.sqrt(3) * x0,
+  vx: 0.0,
+  vy: -2 * n * x0,
+  vz: 0.0
+}
+
+circular_points =
+  circular
+  |> HCW.propagate(n, dt, period)
+  |> Enum.take_every(10)
+  |> Enum.map(fn {t, s} ->
+    %{
+      "tilted_radial_km" => 0.5 * s.x + :math.sqrt(3) / 2 * s.z,
+      "along_track_km" => s.y,
+      "t_min" => t / 60
+    }
+  end)
+
+Vl.new(
+  width: 340,
+  height: 340,
+  title: "Circular relative orbit, viewed in its own tilted plane"
+)
+|> Vl.data_from_values(circular_points)
+|> Vl.mark(:line, point: false, stroke_width: 2)
+|> Vl.encode_field(:x, "tilted_radial_km",
+  type: :quantitative,
+  title: "In-plane radial (within the orbit's own plane, km)",
+  scale: [zero: false]
+)
+|> Vl.encode_field(:y, "along_track_km",
+  type: :quantitative,
+  title: "Along-track y (km)",
+  scale: [zero: false]
+)
+|> Vl.encode_field(:order, "t_min", type: :quantitative)
+```
