@@ -1,0 +1,13 @@
+# plumbline checkpoint snapshot
+# report:    20260905T221258Z.jsonl
+# notebook:  hcw_concurrency
+# captured:  2026-09-05T22:12:58Z, before evaluation
+# HEAD:      289941c
+#
+# Working-tree changes against HEAD, plus untracked files listed
+# below. This is the exact state the paired report describes.
+#
+# untracked (2):
+#   livebooks/hcw_concurrency.livemd
+#   livebooks/hcw_numerical_quality.livemd
+# ----------------------------------------------------------

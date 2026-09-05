@@ -1,0 +1,209 @@
+<!-- livebook:{"app_settings":{"slug":"hcw-numerical-quality","access_type":"public"}} -->
+
+# HCW: Numerical Quality of the Integrator
+
+```elixir
+project_path = System.get_env("PLUMBLINE_PROJECT_PATH") || Path.join(__DIR__, "..")
+
+Mix.install([{:plumbline, path: project_path}])
+```
+
+## What this document is
+
+The other gates ask whether the implementation gets the *physics*
+right. This one asks whether it integrates *well* — two properties of
+the numerical method that every other check here is structurally unable
+to see, because both are invisible at a single step size over a single
+orbit.
+
+**Convergence order.** The interface contract names a specific method
+of a specific order. An implementation of a *lower*-order method still
+satisfies every invariant in the specification notebook: the
+trajectories close, the integral is conserved, the oracle agrees — all
+of it, just less accurately, and the tolerances there are loose enough
+to absorb the difference. Order is only visible by refining the step
+and watching how fast the error falls.
+
+**Long-horizon stability.** Every other check runs for one orbit. An
+integrator can be perfectly well behaved over one orbit and drift,
+ring, or diverge over a hundred. Correctness over a short window is not
+stability over a long one, and the difference is exactly the kind of
+thing that reaches production intact.
+
+Gated separately, with its own history:
+
+```sh
+bin/run_checkpoint livebooks/hcw_numerical_quality.livemd
+elixir bin/checkpoint_history.exs hcw_numerical_quality
+```
+
+```elixir
+Code.require_file(Path.join(project_path, "livebooks/checkpoint.exs"))
+
+Checkpoint.init([
+  "convergence_error_decreases_under_refinement",
+  "convergence_order_matches_the_contract",
+  "long_horizon_integral_bounded",
+  "long_horizon_orbit_still_closes",
+  "long_horizon_drift_not_explosive"
+])
+```
+
+## Setup
+
+A state with every component active, so no term of the dynamics sits
+idle during the measurement.
+
+```elixir
+alias Plumbline.Dynamics.HCW
+
+mu = 398_600.4418
+a = 6378.137 + 400.0
+n = :math.sqrt(mu / (a * a * a))
+period = 2 * :math.pi() / n
+x0 = 1.0
+
+initial = %HCW.State{x: x0, y: 0.0, z: 0.3, vx: 0.0005, vy: -2 * n * x0, vz: 0.0002}
+
+separation = fn p, q ->
+  :math.sqrt(:math.pow(p.x - q.x, 2) + :math.pow(p.y - q.y, 2) + :math.pow(p.z - q.z, 2))
+end
+
+%{period_min: Float.round(period / 60, 3)}
+```
+
+## Convergence under refinement
+
+Deliberately coarse grids. At the step sizes the specification notebook
+uses, the error is already down at the rounding floor, where the
+method's order is unmeasurable — refinement stops buying anything and
+the measurement reads noise. Order is only observable while truncation
+error still dominates.
+
+```elixir
+step_counts = [50, 100, 200, 400, 800]
+
+errors =
+  for count <- step_counts do
+    worst =
+      initial
+      |> HCW.propagate(n, period / count, period)
+      |> Enum.map(fn {t, numeric} -> separation.(numeric, HCW.analytic(initial, n, t)) end)
+      |> Enum.max()
+
+    IO.puts("  steps/orbit #{String.pad_leading(to_string(count), 4)}   error #{worst} km")
+    worst
+  end
+```
+
+Refinement must actually buy accuracy. This is separate from the order
+check below and comes first, because if any error is zero or fails to
+fall, the order is not merely wrong — it is undefined, and the ratio
+computed from it would be meaningless rather than red.
+
+```elixir
+strictly_decreasing? =
+  errors
+  |> Enum.chunk_every(2, 1, :discard)
+  |> Enum.all?(fn [coarse, fine] -> fine > 0.0 and fine < coarse end)
+
+Checkpoint.check("convergence_error_decreases_under_refinement", strictly_decreasing?,
+  expected: true,
+  actual: strictly_decreasing?,
+  unit: "boolean",
+  message: "every halving of the step must reduce the error, and no error may be exactly zero"
+)
+```
+
+The observed order is the base-2 logarithm of the ratio between
+successive errors: halving the step and dividing the error by `2^p`
+means the method is of order `p`.
+
+```elixir
+orders =
+  errors
+  |> Enum.chunk_every(2, 1, :discard)
+  |> Enum.map(fn [coarse, fine] -> :math.log(coarse / fine) / :math.log(2) end)
+
+Enum.zip(step_counts, orders)
+|> Enum.each(fn {c, p} -> IO.puts("  #{c} -> #{c * 2} steps/orbit   observed order #{Float.round(p, 4)}") end)
+
+worst_order_error = orders |> Enum.map(&abs(&1 - 4.0)) |> Enum.max()
+
+Checkpoint.check("convergence_order_matches_the_contract", worst_order_error < 0.5,
+  expected: 4.0,
+  actual: orders |> Enum.map(&Float.round(&1, 4)),
+  tolerance: 0.5,
+  unit: "order",
+  message: "observed convergence order at each refinement; a lower-order method still satisfies every other gate in this repository"
+)
+```
+
+## Long horizon
+
+One hundred orbits. Sampled at each orbit boundary, so the closure and
+the drift can be read as series rather than as endpoints.
+
+```elixir
+orbits = 100
+steps_per_orbit = 1_000
+dt = period / steps_per_orbit
+
+long = HCW.propagate(initial, n, dt, orbits * period)
+
+j_initial = HCW.integral(initial, n)
+integrals = Enum.map(long, fn {_, s} -> HCW.integral(s, n) end)
+integral_spread = (Enum.max(integrals) - Enum.min(integrals)) / abs(j_initial)
+
+closure_at =
+  fn k ->
+    {_, s} = Enum.at(long, k * steps_per_orbit)
+    separation.(s, initial)
+  end
+
+IO.puts("  J spread over #{orbits} orbits: #{integral_spread} relative")
+IO.puts("  closure at  50 orbits: #{closure_at.(50)} km")
+IO.puts("  closure at 100 orbits: #{closure_at.(100)} km")
+```
+
+```elixir
+Checkpoint.check("long_horizon_integral_bounded", integral_spread < 1.0e-6,
+  expected: 0.0,
+  actual: integral_spread,
+  tolerance: 1.0e-6,
+  unit: "relative",
+  message: "spread of J across #{orbits} orbits — RK4 is not symplectic, so this is a bound rather than an equality"
+)
+
+final_closure = closure_at.(orbits)
+
+Checkpoint.check("long_horizon_orbit_still_closes", final_closure < 1.0e-3,
+  expected: 0.0,
+  actual: final_closure,
+  tolerance: 1.0e-3,
+  unit: "km",
+  message: "a drift-free orbit must still return to its start after #{orbits} periods, not merely after one"
+)
+```
+
+Accumulated error is expected — the method is not symplectic and makes
+no claim to conserve anything exactly. What must not happen is
+*acceleration*: doubling the elapsed time should roughly double the
+drift, not square it. A ratio near two is linear growth; a ratio far
+above it means the error is feeding on itself.
+
+```elixir
+growth = final_closure / closure_at.(div(orbits, 2))
+
+Checkpoint.check("long_horizon_drift_not_explosive", growth < 4.0,
+  expected: "~2 (linear)",
+  actual: growth,
+  tolerance: 4.0,
+  unit: "ratio",
+  message: "closure error at #{orbits} orbits against #{div(orbits, 2)} orbits; linear accumulation is fine, compounding is not"
+)
+```
+
+```elixir
+Checkpoint.complete()
+```

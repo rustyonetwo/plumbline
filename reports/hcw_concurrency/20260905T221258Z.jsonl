@@ -1,0 +1,2 @@
+{"manifest":["concurrent_matches_sequential","concurrent_result_is_deterministic","shared_input_yields_identical_results","survivors_unaffected_by_sibling_crash"]}
+{"snapshot":"20260905T221258Z.diff","head":"289941c","diff_sha":"6562f4cb662a","dirty":true,"untracked":2}

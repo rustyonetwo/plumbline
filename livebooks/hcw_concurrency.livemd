@@ -1,0 +1,199 @@
+<!-- livebook:{"app_settings":{"slug":"hcw-concurrency","access_type":"public"}} -->
+
+# HCW: Purity Under Concurrency
+
+```elixir
+project_path = System.get_env("PLUMBLINE_PROJECT_PATH") || Path.join(__DIR__, "..")
+
+Mix.install([{:plumbline, path: project_path}])
+```
+
+## What this document is
+
+Every other gate in this repository runs the implementation one call at
+a time, in one process. This one runs it many at a time, in many
+processes, and asserts that nothing changes.
+
+The property under test is **purity**: the same inputs must produce the
+same outputs, always, regardless of what else is running. Nothing in
+the interface contract promises this in so many words, and no check
+elsewhere can see it. An implementation that memoises into the process
+dictionary, an ETS table, or `:persistent_term` satisfies every
+invariant in this repository — the physics is right, the oracle agrees,
+the invariants hold — and then returns a stale answer the first time
+two callers overlap.
+
+That failure does not appear in development, appears intermittently
+under load, and is not reproducible from the inputs alone. It is
+exactly the class of defect that reaches production intact.
+
+Every assertion here demands **exact equality**. Purity is not a
+quantity with a tolerance: results either match or the implementation
+has state in it.
+
+Gated separately, with its own history:
+
+```sh
+bin/run_checkpoint livebooks/hcw_concurrency.livemd
+elixir bin/checkpoint_history.exs hcw_concurrency
+```
+
+```elixir
+Code.require_file(Path.join(project_path, "livebooks/checkpoint.exs"))
+
+Checkpoint.init([
+  "concurrent_matches_sequential",
+  "concurrent_result_is_deterministic",
+  "shared_input_yields_identical_results",
+  "survivors_unaffected_by_sibling_crash"
+])
+```
+
+## Workload
+
+Distinct states, enough of them and enough work in each that the
+schedulers genuinely interleave rather than finishing one before the
+next begins.
+
+```elixir
+alias Plumbline.Dynamics.HCW
+
+seed = 20_260_905
+:rand.seed(:exsss, {seed, seed, seed})
+
+tasks_count = 32
+steps = 2_000
+
+mu = 398_600.4418
+n = :math.sqrt(mu / :math.pow(6378.137 + 400.0, 3))
+period = 2 * :math.pi() / n
+dt = period / steps
+
+uniform = fn lo, hi -> lo + :rand.uniform() * (hi - lo) end
+
+states =
+  for _ <- 1..tasks_count do
+    v = n * 10.0
+
+    %HCW.State{
+      x: uniform.(-10.0, 10.0),
+      y: uniform.(-10.0, 10.0),
+      z: uniform.(-10.0, 10.0),
+      vx: uniform.(-v, v),
+      vy: uniform.(-v, v),
+      vz: uniform.(-v, v)
+    }
+  end
+
+work = fn state -> HCW.propagate(state, n, dt, period) end
+
+in_parallel = fn inputs ->
+  inputs
+  |> Task.async_stream(work, ordered: true, timeout: 120_000, max_concurrency: System.schedulers_online())
+  |> Enum.map(fn {:ok, result} -> result end)
+end
+
+%{schedulers: System.schedulers_online(), tasks: tasks_count, steps_each: steps}
+```
+
+## Concurrent against sequential
+
+```elixir
+sequential = Enum.map(states, work)
+parallel = in_parallel.(states)
+
+matches_sequential? = sequential == parallel
+
+Checkpoint.check("concurrent_matches_sequential", matches_sequential?,
+  expected: true,
+  actual: matches_sequential?,
+  unit: "boolean",
+  message: "#{tasks_count} trajectories computed concurrently must equal the same trajectories computed one at a time"
+)
+```
+
+## The same work twice
+
+Running concurrently once and getting the right answer can be luck: a
+particular interleaving that happened not to collide. Two runs of the
+same workload must agree with each other as well, because a shared
+mutable cell produces results that depend on scheduling rather than on
+inputs.
+
+```elixir
+deterministic? = in_parallel.(states) == parallel
+
+Checkpoint.check("concurrent_result_is_deterministic", deterministic?,
+  expected: true,
+  actual: deterministic?,
+  unit: "boolean",
+  message: "the identical concurrent workload run twice must produce identical results; disagreement means the answer depends on scheduling"
+)
+```
+
+## One input, many processes at once
+
+The sharpest form: every process asks the same question simultaneously.
+A cache keyed too loosely, or written without regard for who else is
+reading, shows up here as processes disagreeing about a single answer.
+
+```elixir
+one_state = List.first(states)
+answers = in_parallel.(List.duplicate(one_state, tasks_count))
+distinct = answers |> Enum.uniq() |> length()
+
+Checkpoint.check("shared_input_yields_identical_results", distinct == 1,
+  expected: 1,
+  actual: distinct,
+  unit: "distinct results",
+  message: "#{tasks_count} processes propagating the same state must produce exactly one distinct answer between them"
+)
+```
+
+## Survivors of a sibling crash
+
+Tasks are started under a supervisor and some are killed part-way. The
+ones that live must finish with the answers they would have produced
+alone. A pure computation has nothing for a dying neighbour to corrupt;
+shared state does.
+
+```elixir
+{:ok, supervisor} = Task.Supervisor.start_link()
+
+running =
+  for state <- states do
+    Task.Supervisor.async_nolink(supervisor, fn -> work.(state) end)
+  end
+
+# Kill every third task while the rest are still going.
+running
+|> Enum.with_index()
+|> Enum.each(fn {task, index} -> if rem(index, 3) == 0, do: Process.exit(task.pid, :kill) end)
+
+outcomes = Task.yield_many(running, 120_000)
+
+survivors_correct? =
+  outcomes
+  |> Enum.with_index()
+  |> Enum.all?(fn
+    {{_task, {:ok, result}}, index} -> result == Enum.at(sequential, index)
+    {{_task, _dead_or_pending}, _index} -> true
+  end)
+
+survivor_count = Enum.count(outcomes, fn {_, outcome} -> match?({:ok, _}, outcome) end)
+
+Supervisor.stop(supervisor)
+
+IO.puts("  #{survivor_count} of #{tasks_count} tasks survived")
+
+Checkpoint.check("survivors_unaffected_by_sibling_crash", survivors_correct? and survivor_count > 0,
+  expected: true,
+  actual: survivors_correct?,
+  unit: "boolean",
+  message: "tasks that outlive a killed sibling must return exactly what they would have returned alone (#{survivor_count} survivors checked)"
+)
+```
+
+```elixir
+Checkpoint.complete()
+```
